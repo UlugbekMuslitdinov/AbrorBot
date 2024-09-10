@@ -1,0 +1,141 @@
+{
+    "303925035": {
+        "username": "Behruz0801",
+        "first_name": "Behruz",
+        "last_name": null,
+        "type": "admin",
+        "saved_name": "",
+        "debt": 0,
+        "orders": []
+    },
+    "659681342": {
+        "username": "umuslitdinov_29",
+        "first_name": "\u0423\u043b\u0443\u0433\u0431\u0435\u043a",
+        "last_name": "\u041c\u0443\u0441\u043b\u0438\u0442\u0434\u0438\u043d\u043e\u0432",
+        "type": "admin",
+        "saved_name": "",
+        "debt": 1235,
+        "orders": []
+    },
+    "865605227": {
+        "username": "abdullokhganiev",
+        "first_name": "Abdullokh",
+        "last_name": null,
+        "type": "client",
+        "saved_name": "Ko'cha",
+        "debt": 0,
+        "orders": [
+            {
+                "order_id": "1",
+                "saved_name": "Ko'cha",
+                "debt": 23613000,
+                "order_date": "14,08,2024",
+                "products": [
+                    {
+                        "product_name": "STICK",
+                        "product_price": 55000,
+                        "product_quantity": 15
+                    },
+                    {
+                        "product_name": "STICK BOX",
+                        "product_price": 70000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "CAR",
+                        "product_price": 250000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": " MINI CAR 40",
+                        "product_price": 200000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "CUP BOX 100",
+                        "product_price": 140000,
+                        "product_quantity": 10
+                    },
+                    {
+                        "product_name": "CUP BOX",
+                        "product_price": 90000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "CUP 14",
+                        "product_price": 75000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "CUP MIX BOX",
+                        "product_price": 90000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "CUP MIX 18",
+                        "product_price": 80000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "CROC",
+                        "product_price": 150000,
+                        "product_quantity": 10
+                    },
+                    {
+                        "product_name": "SNAKE",
+                        "product_price": 150000,
+                        "product_quantity": 10
+                    },
+                    {
+                        "product_name": "BOOM 60",
+                        "product_price": 200000,
+                        "product_quantity": 10
+                    },
+                    {
+                        "product_name": "BOOM 35",
+                        "product_price": 120000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "Dino",
+                        "product_price": 150000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "Fruit 3D",
+                        "product_price": 150000,
+                        "product_quantity": 2
+                    },
+                    {
+                        "product_name": "RING",
+                        "product_price": 65000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "RING BOX",
+                        "product_price": 80000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "DRINK COLA",
+                        "product_price": 65000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "DRINK BOX",
+                        "product_price": 120000,
+                        "product_quantity": 0
+                    },
+                    {
+                        "product_name": "Konjac 15",
+                        "product_price": 230000,
+                        "product_quantity": 0
+                    }
+                ],
+                "total_sum": 25655000,
+                "total_quantity": 187,
+                "total_debt": 0
+            }
+        ]
+    }
+}
