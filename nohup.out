@@ -1,0 +1,14 @@
+./bot.py: 1: import: not found
+./bot.py: 2: import: not found
+./bot.py: 3: from: not found
+./bot.py: 4: : not found
+./bot.py: 5: TOKEN: not found
+./bot.py: 6: : not found
+./bot.py: 7: Syntax error: "(" unexpected
+./bot.py: 1: import: not found
+./bot.py: 2: import: not found
+./bot.py: 3: from: not found
+./bot.py: 4: : not found
+./bot.py: 5: TOKEN: not found
+./bot.py: 6: : not found
+./bot.py: 7: Syntax error: "(" unexpected
