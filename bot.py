@@ -294,6 +294,18 @@ def list_orders(user_id):
     data = load_data('data.json')
     user_data = data.get(user_id, None)
 
+    if is_admin(user_id):
+        orders = []
+        for user_id, user_data in data.items():
+            if user_data.get('type') == 'client':
+                orders.extend(user_data.get('orders', []))
+        if orders:
+            return "\n".join(
+                [f"Mijoz ID: {order['user_id']}, Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}" for
+                 order in orders])
+        else:
+            return "Buyurtmalar topilmadi."
+
     if user_data:
         orders = user_data.get('orders', [])
         if orders:
