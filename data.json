@@ -23,10 +23,10 @@
         "last_name": null,
         "type": "client",
         "saved_name": "Ko'cha",
-        "debt": 0,
+        "debt": 50000,
         "orders": [
             {
-                "order_id": "1",
+                "order_id": "2",
                 "saved_name": "Ko'cha",
                 "debt": 23613000,
                 "order_date": "14,08,2024",
@@ -137,7 +137,7 @@
                 "total_debt": 0
             },
             {
-                "order_id": "2",
+                "order_id": "4",
                 "saved_name": "Ko'cha",
                 "debt": 23613000,
                 "order_date": "14,08,2024",
@@ -397,8 +397,5 @@
                 "total_debt": 561761100
             }
         ]
-    },
-    "/add_order": {
-        "username": "None"
     }
 }

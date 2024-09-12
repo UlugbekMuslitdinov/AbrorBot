@@ -47,6 +47,16 @@ def list_clients():
     return clients
 
 
+def get_orders_number():
+    data = load_data('data.json')
+    num = 0
+    for user_id, user_data in data.items():
+        if user_data.get('type') == 'client':
+            orders = user_data.get('orders', [])
+            num += len(orders)
+    return num
+
+
 # Admin selects a client to edit
 @bot.message_handler(commands=['edit_client'])
 def handle_edit_client(message):
@@ -95,7 +105,7 @@ def handle_select_client_for_edit(message):
 
         # Ask admin which field they want to edit
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Famailya"))
+        markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familya"))
         markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
         user_states[user_id] = 'choosing_field_to_edit'
         bot.send_message(message.chat.id, "Qaysi maydonni o'zgartirish?", reply_markup=markup)
@@ -131,10 +141,6 @@ def handle_edit_field(message):
     user_id = str(message.from_user.id)
     selected_client_id = admin_selected_clients.get(user_id)
     new_value = message.text.strip()
-
-    print(user_id)
-    print(selected_client_id)
-    print(new_value)
 
     if selected_client_id:
         data = load_data('data.json')
@@ -254,7 +260,8 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
 
     if user_data:
         orders = user_data.get('orders', [])
-        order_id = str(len(orders) + 1)
+        order_id = str(get_orders_number() + 1)  # Generate a new order ID
+        print(order_id)
         order = {
             'order_id': order_id,
             'saved_name': saved_name,
@@ -295,14 +302,16 @@ def list_orders(user_id):
     user_data = data.get(user_id, None)
 
     if is_admin(user_id):
-        orders = []
+        orders = {}
         for user_id, user_data in data.items():
             if user_data.get('type') == 'client':
-                orders.extend(user_data.get('orders', []))
+                orders.update({" ".join([user_data.get('first_name', ""),
+                                         user_data.get('Last_name', "")]): user_data.get('orders', [])})
         if orders:
             return "\n".join(
-                [f"Mijoz ID: {order['user_id']}, Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}" for
-                 order in orders])
+                [f"Mijoz: {user_id}\n" + "\n".join(
+                    [f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}" for
+                     order in orders]) for user_id, orders in orders.items()])
         else:
             return "Buyurtmalar topilmadi."
 
@@ -315,6 +324,14 @@ def list_orders(user_id):
         else:
             return "Buyurtma topilmadi."
     return "Mijoz topilmadi."
+
+
+def get_debt(user_id):
+    data = load_data('data.json')
+    user_data = data.get(user_id, None)
+    if user_data:
+        return user_data.get('debt', 0)
+    return 0
 
 
 # Function to list all products in a specific order
@@ -457,7 +474,7 @@ def handle_delete_order(message):
                 markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
 
             user_states[user_id] = 'selecting_client_for_order_deletion'
-            bot.send_message(message.chat.id, "Mijoqni tanlang", reply_markup=markup)
+            bot.send_message(message.chat.id, "Mijozni tanlang", reply_markup=markup)
         else:
             bot.send_message(message.chat.id, "Bunday mijozlar topilmadi.")
     else:
@@ -521,7 +538,7 @@ def handle_select_order_for_deletion(message):
                 client_data['orders'] = new_orders
                 data[selected_client_id] = client_data
                 save_data('data.json', data)
-                bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} o`chirish.")
+                bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} o`chirildi.")
 
         # Reset state
         user_states[user_id] = None
@@ -539,6 +556,7 @@ def handle_list_orders(message):
     if is_client(user_id):
         orders_list = list_orders(user_id)  # Clients can only list their own orders
         bot.send_message(message.chat.id, orders_list)
+        bot.send_message(message.chat.id, f"Qarz: {get_debt(user_id)}")
     elif is_admin(user_id):
         # Admins can list all orders
         orders_list = list_orders(user_id)
