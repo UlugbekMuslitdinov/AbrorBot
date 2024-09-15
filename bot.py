@@ -10,6 +10,30 @@ bot = telebot.TeleBot(TOKEN)
 user_states = {}
 admin_selected_clients = {}  # To keep track of the client selected by the admin for adding an order
 
+commands_list = [
+    "/start", "/help", "/add_order", "/delete_order", "/edit_client", "/list_orders", "/list_products"
+]
+
+
+def redirect_to_command(message):
+    if message.text == "/start":
+        start(message)
+    elif message.text == "/help":
+        help(message)
+    elif message.text == "/add_order":
+        handle_add_order(message)
+    elif message.text == "/delete_order":
+        handle_delete_order(message)
+    elif message.text == "/edit_client":
+        handle_edit_client(message)
+    elif message.text == "/list_orders":
+        handle_list_orders(message)
+    elif message.text == "/list_products":
+        handle_list_products(message)
+    else:
+        bot.send_message(message.chat.id, "Noto`g`ri buyruq. Iltimos, quyidagi buyruqlardan birini tanlang:")
+        bot.send_message(message.chat.id, "\n".join(commands_list))
+
 
 # Функция для загрузки данных из JSON-файла
 def load_data(filename):
@@ -47,6 +71,23 @@ def list_clients():
     return clients
 
 
+def back_to_menu(message):
+    user_id = str(message.from_user.id)
+    if is_admin(user_id):
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add(KeyboardButton("Buyurtma qo'shish"), KeyboardButton("Buyurtmani o'chirish"))
+        markup.add(KeyboardButton("Mijoz ma'lumotlarini o'zgartirish"), KeyboardButton("Buyurtmalarni ko'rish"))
+        user_states[user_id] = None
+        bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
+        print("Back to menu")
+    else:
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add(KeyboardButton("Buyurtma qo'shish"), KeyboardButton("Buyurtmalarni ko'rish"))
+        user_states[user_id] = None
+        bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
+        print("Back to menu")
+
+
 def get_orders_number():
     data = load_data('data.json')
     num = 0
@@ -57,8 +98,22 @@ def get_orders_number():
     return num
 
 
+def get_max_order_id():
+    data = load_data('data.json')
+    max_id = 0
+    for user_id, user_data in data.items():
+        if user_data.get('type') == 'client':
+            orders = user_data.get('orders', [])
+            for order in orders:
+                order_id = int(order['order_id'])
+                if order_id > max_id:
+                    max_id = order_id
+    print("Max order ID:", max_id)
+    return max_id
+
+
 # Admin selects a client to edit
-@bot.message_handler(commands=['edit_client'])
+@bot.message_handler(func=lambda message: message.text == "/edit_client" or message.text == "Mijoz ma'lumotlarini o'zgartirish")
 def handle_edit_client(message):
     user_id = str(message.from_user.id)
 
@@ -69,6 +124,7 @@ def handle_edit_client(message):
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for client_id, client_data in clients.items():
                 markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
+            markup.add(KeyboardButton("Bosh menyu"))
 
             user_states[user_id] = 'selecting_client_for_edit'
             bot.send_message(message.chat.id, "O'zgartirish uchun mijozni tanlang:", reply_markup=markup)
@@ -83,6 +139,14 @@ def handle_edit_client(message):
 def handle_select_client_for_edit(message):
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
+
+    if client_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if client_choice in commands_list:
+        redirect_to_command(message)
+        return
 
     # Extract client ID from the selected text (the ID is in parentheses)
     try:
@@ -105,8 +169,9 @@ def handle_select_client_for_edit(message):
 
         # Ask admin which field they want to edit
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familya"))
+        markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familiya"))
         markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
+        markup.add(KeyboardButton("Bosh menyu"))
         user_states[user_id] = 'choosing_field_to_edit'
         bot.send_message(message.chat.id, "Qaysi maydonni o'zgartirish?", reply_markup=markup)
 
@@ -120,16 +185,27 @@ def handle_choose_field_to_edit(message):
     user_id = str(message.from_user.id)
     field_choice = message.text.strip()
 
+    if field_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if field_choice in commands_list:
+        redirect_to_command(message)
+        return
+
     if field_choice in ["Username", "Ism", "Familiya", "Sistemadagi Ism", "Qarzi", "Type"]:
         # Special handling for 'Type' to show buttons
         if field_choice == "Type":
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(KeyboardButton("Admin"), KeyboardButton("Client"))
+            markup.add(KeyboardButton("Bosh menyu"))
             user_states[user_id] = 'editing_type'
             bot.send_message(message.chat.id, "Mijoz typeni tanlang:", reply_markup=markup)
         else:
             user_states[user_id] = f"editing_{field_choice.lower().replace(' ', '_')}"
-            bot.send_message(message.chat.id, f"Yangi {field_choice.lower()} kiriting:")
+            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            markup.add(KeyboardButton("Bosh menyu"))
+            bot.send_message(message.chat.id, f"Yangi {field_choice.lower()} kiriting:", reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "Invalid choice. Please select a valid field.")
 
@@ -141,6 +217,14 @@ def handle_edit_field(message):
     user_id = str(message.from_user.id)
     selected_client_id = admin_selected_clients.get(user_id)
     new_value = message.text.strip()
+
+    if new_value == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if new_value in commands_list:
+        redirect_to_command(message)
+        return
 
     if selected_client_id:
         data = load_data('data.json')
@@ -209,6 +293,7 @@ def start(message):
             data[user_id]['orders'] = []
             save_data('data.json', data)
         bot.send_message(message.chat.id, f"Qaytadan salom, {message.from_user.first_name}!")
+    back_to_menu(message)
 
 
 # Function to parse user input and create an order
@@ -246,7 +331,8 @@ def parse_order_input(message_text):
 
     # Extract the final summary line (Jami summa)
     summary_line = lines[-1].split("  ")
-    total_sum = int("".join(summary_line[1].split()[:-1]))
+    second_last = lines[-2].split("  ")
+    total_sum = int("".join(second_last[1].split()[:-1]))
     total_quantity = int(summary_line[2])
     total_debt = int("".join(summary_line[-1].split()[:-1]))
 
@@ -260,7 +346,7 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
 
     if user_data:
         orders = user_data.get('orders', [])
-        order_id = str(get_orders_number() + 1)  # Generate a new order ID
+        order_id = str(get_max_order_id() + 1)  # Generate a new order ID
         print(order_id)
         order = {
             'order_id': order_id,
@@ -308,10 +394,20 @@ def list_orders(user_id):
                 orders.update({" ".join([user_data.get('first_name', ""),
                                          user_data.get('Last_name', "")]): user_data.get('orders', [])})
         if orders:
-            return "\n".join(
-                [f"Mijoz: {user_id}\n" + "\n".join(
-                    [f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}" for
-                     order in orders]) for user_id, orders in orders.items()])
+            # return "\n".join(
+            #     [f"Mijoz: {user_id}\n" + "\n".join(
+            #         [f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}" for
+            #          order in orders if orders]) for user_id, orders in orders.items() if orders])
+            message = ""
+            for user_id, orders in orders.items():
+                message += f"Mijoz: {user_id}\n"
+                if orders:
+                    for order in orders:
+                        message += f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}\n"
+                    message += "\n"
+                else:
+                    message += "Buyurtmalari topilmadi.\n"
+            return message
         else:
             return "Buyurtmalar topilmadi."
 
@@ -346,9 +442,9 @@ def list_products(user_id, order_id):
                 products = order.get('products', [])
                 if products:
                     return "\n".join([
-                                         f"Mahsulot: {product['product_name']}, Narx: {product['product_price']}, "
-                                         f"Miqdori: {product['product_quantity']}"
-                                         for product in products])
+                        f"Mahsulot: {product['product_name']}, Narx: {product['product_price']}, "
+                        f"Miqdori: {product['product_quantity']}"
+                        for product in products])
                 else:
                     return "Mahsulot topilmadi."
         return "Buyurtma topilmadi."
@@ -364,8 +460,8 @@ def add_product(product_name, product_price, product_quantity):
     }
 
 
-# Step 1: Handle the /add_order command
-@bot.message_handler(commands=['add_order'])
+# Step 1: Handle the /add_order command or the "Buyurtma qo'shish" button
+@bot.message_handler(func=lambda message: message.text == "Buyurtma qo'shish" or message.text == "/add_order")
 def handle_add_order(message):
     user_id = str(message.from_user.id)
 
@@ -376,12 +472,12 @@ def handle_add_order(message):
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for client_id, client_data in clients.items():
                 markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
-            markup.add(KeyboardButton("Yangi mijoz yaratish"))
+            markup.add(KeyboardButton("Bosh menyu"))
 
             user_states[user_id] = 'selecting_client'
-            bot.send_message(message.chat.id, "Mijozni tanlang yoki yangisini yarating:", reply_markup=markup)
+            bot.send_message(message.chat.id, "Mijozni tanlang:", reply_markup=markup)
         else:
-            bot.send_message(message.chat.id, "Mijozlar topilmadi. Iltimos, yangi mijoz yarating.")
+            bot.send_message(message.chat.id, "Mijozlar topilmadi.")
     else:
         bot.send_message(message.chat.id, "Sizda buyurtma qo`shishga ruxsat yo`q.")
 
@@ -391,6 +487,14 @@ def handle_add_order(message):
 def handle_select_client(message):
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
+
+    if client_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if client_choice in commands_list:
+        redirect_to_command(message)
+        return
 
     if client_choice == "Yangi mijoz yaratish":
         user_states[user_id] = 'creating_client'
@@ -402,7 +506,10 @@ def handle_select_client(message):
             selected_client_id = client_choice.split('(')[-1].strip(')')
             admin_selected_clients[user_id] = selected_client_id
             user_states[user_id] = 'awaiting_order_data'
-            bot.send_message(message.chat.id, "Buyurtma ma'lumotlarini berilgan formatda kiriting:")
+            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            markup.add(KeyboardButton("Bosh menyu"))
+            bot.send_message(message.chat.id, "Buyurtma ma'lumotlarini berilgan formatda kiriting:",
+                             reply_markup=markup)
         except:
             bot.send_message(message.chat.id, "Noto`g`ri mijoz tanlandi. Iltimos, qaytadan urinib ko`ring.")
 
@@ -410,6 +517,14 @@ def handle_select_client(message):
 # Step 3: Handle the creation of a new client
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'creating_client')
 def handle_create_client(message):
+    if message.text == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if message.text in commands_list:
+        redirect_to_command(message)
+        return
+
     user_id = str(message.from_user.id)
     client_info = message.text.strip().split()
 
@@ -441,6 +556,14 @@ def handle_create_client(message):
 # Step 4: Handle the user's input data for orders
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'awaiting_order_data')
 def receive_order_data(message):
+    if message.text == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if message.text in commands_list:
+        redirect_to_command(message)
+        return
+
     user_id = str(message.from_user.id)
     user_input = message.text.strip()
     selected_client_id = admin_selected_clients.get(user_id)
@@ -461,7 +584,7 @@ def receive_order_data(message):
 
 
 # Example of using delete_order function
-@bot.message_handler(commands=['delete_order'])
+@bot.message_handler(func=lambda message: message.text == "/delete_order" or message.text == "Buyurtmani o'chirish")
 def handle_delete_order(message):
     user_id = str(message.from_user.id)
 
@@ -472,11 +595,14 @@ def handle_delete_order(message):
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for client_id, client_data in clients.items():
                 markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
+            markup.add(KeyboardButton("Bosh menyu"))
 
             user_states[user_id] = 'selecting_client_for_order_deletion'
             bot.send_message(message.chat.id, "Mijozni tanlang", reply_markup=markup)
         else:
-            bot.send_message(message.chat.id, "Bunday mijozlar topilmadi.")
+            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            markup.add(KeyboardButton("Bosh menyu"))
+            bot.send_message(message.chat.id, "Bunday mijozlar topilmadi.", reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmani o`chirishga ruxsat yo`q.")
 
@@ -485,6 +611,14 @@ def handle_delete_order(message):
 @bot.message_handler(
     func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client_for_order_deletion')
 def handle_select_client_for_order_deletion(message):
+    if message.text == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if message.text in commands_list:
+        redirect_to_command(message)
+        return
+
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
 
@@ -503,11 +637,14 @@ def handle_select_client_for_order_deletion(message):
             for order in orders:
                 markup.add(KeyboardButton(
                     f"Buyurtma ID: {order['order_id']}, Miqdor: {order['total_sum']}, Sana: {order['order_date']}"))
+            markup.add(KeyboardButton("Bosh menyu"))
 
             user_states[user_id] = 'selecting_order_for_deletion'
             bot.send_message(message.chat.id, "O'chirish uchun buyurtmani tanlang:", reply_markup=markup)
         else:
-            bot.send_message(message.chat.id, "Mijozda buyurtmalar topilmadi.")
+            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            markup.add(KeyboardButton("Bosh menyu"))
+            bot.send_message(message.chat.id, "Mijozda buyurtmalar topilmadi.", reply_markup=markup)
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Mijoz noto`g`ri tanlangan: {e}")
@@ -516,6 +653,14 @@ def handle_select_client_for_order_deletion(message):
 # Handle the selection of an order to delete
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
 def handle_select_order_for_deletion(message):
+    if message.text == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if message.text in commands_list:
+        redirect_to_command(message)
+        return
+
     user_id = str(message.from_user.id)
     order_choice = message.text.strip()
 
@@ -549,7 +694,7 @@ def handle_select_order_for_deletion(message):
 
 
 # Handle the /list_orders command
-@bot.message_handler(commands=['list_orders'])
+@bot.message_handler(func=lambda message: message.text == "/list_orders" or message.text == "Buyurtmalarni ko'rish")
 def handle_list_orders(message):
     user_id = str(message.from_user.id)
 
@@ -563,6 +708,7 @@ def handle_list_orders(message):
         bot.send_message(message.chat.id, orders_list)
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmalar ro`yxati ko`rishga ruxsat yo`q.")
+    back_to_menu(message)
 
 
 # Handle the /list_products command
