@@ -82,7 +82,7 @@ def back_to_menu(message):
         print("Back to menu")
     else:
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add(KeyboardButton("Buyurtma qo'shish"), KeyboardButton("Buyurtmalarni ko'rish"))
+        markup.add(KeyboardButton("Buyurtmalarni ko'rish"))
         user_states[user_id] = None
         bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
         print("Back to menu")
@@ -116,6 +116,15 @@ def get_max_order_id():
 @bot.message_handler(func=lambda message: message.text == "/edit_client" or message.text == "Mijoz ma'lumotlarini o'zgartirish")
 def handle_edit_client(message):
     user_id = str(message.from_user.id)
+    client_choice = message.text.strip()
+
+    if client_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if client_choice in commands_list:
+        redirect_to_command(message)
+        return
 
     if is_admin(user_id):
         clients = list_clients()
@@ -235,27 +244,35 @@ def handle_edit_field(message):
         if state == 'editing_username':
             client_data['username'] = new_value
             bot.send_message(message.chat.id, f"Username o`zgartirildi '{new_value}'.")
+            back_to_menu(message)
         elif state == 'editing_ism':
             client_data['first_name'] = new_value
             bot.send_message(message.chat.id, f"Ism o`zgartirildi '{new_value}'.")
+            back_to_menu(message)
         elif state == 'editing_familiya':
             client_data['last_name'] = new_value
             bot.send_message(message.chat.id, f"Familiya o`zgartirildi '{new_value}'.")
+            back_to_menu(message)
         elif state == 'editing_sistemadagi_ism':
             client_data['saved_name'] = new_value
             bot.send_message(message.chat.id, f"Sistemadagi ism o`zgartirildi '{new_value}'.")
+            back_to_menu(message)
         elif state == 'editing_qarzi':
             try:
                 client_data['debt'] = int(new_value)
                 bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value}.")
+                back_to_menu(message)
             except ValueError:
                 bot.send_message(message.chat.id, "Qarzni noto`g`ri kiritdingiz. Iltimos, qaytadan kiriting.")
+                back_to_menu(message)
         elif state == 'editing_type':
             if new_value in ['Admin', 'Client']:
                 client_data['type'] = new_value.lower()  # Store as 'admin' or 'client'
                 bot.send_message(message.chat.id, f"User type o`zgartirildi '{new_value.lower()}'.")
+                back_to_menu(message)
             else:
                 bot.send_message(message.chat.id, "Typeni noto`g`ri kiritdingiz. Iltimos, qaytadan kiriting.")
+                back_to_menu(message)
 
         # Save the updated data
         data[selected_client_id] = client_data
@@ -556,6 +573,10 @@ def handle_create_client(message):
 # Step 4: Handle the user's input data for orders
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'awaiting_order_data')
 def receive_order_data(message):
+    user_id = str(message.from_user.id)
+    user_input = message.text.strip()
+    selected_client_id = admin_selected_clients.get(user_id)
+
     if message.text == "Bosh menyu":
         back_to_menu(message)
         return
@@ -564,16 +585,13 @@ def receive_order_data(message):
         redirect_to_command(message)
         return
 
-    user_id = str(message.from_user.id)
-    user_input = message.text.strip()
-    selected_client_id = admin_selected_clients.get(user_id)
-
     if selected_client_id:
         try:
             saved_name, debt, order_date, products, total_sum, total_quantity, total_debt = parse_order_input(
                 user_input)
             add_order(selected_client_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt)
             bot.send_message(message.chat.id, "Buyurtma muvaffaqiyatli qo`shildi.")
+            back_to_menu(message)
         except Exception as e:
             bot.send_message(message.chat.id, f"Buyurtma noto`g`ri kiritilgan {e}")
         finally:
@@ -587,6 +605,15 @@ def receive_order_data(message):
 @bot.message_handler(func=lambda message: message.text == "/delete_order" or message.text == "Buyurtmani o'chirish")
 def handle_delete_order(message):
     user_id = str(message.from_user.id)
+    client_choice = message.text.strip()
+
+    if client_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if client_choice in commands_list:
+        redirect_to_command(message)
+        return
 
     if is_admin(user_id):
         clients = list_clients()
@@ -653,14 +680,6 @@ def handle_select_client_for_order_deletion(message):
 # Handle the selection of an order to delete
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
 def handle_select_order_for_deletion(message):
-    if message.text == "Bosh menyu":
-        back_to_menu(message)
-        return
-
-    if message.text in commands_list:
-        redirect_to_command(message)
-        return
-
     user_id = str(message.from_user.id)
     order_choice = message.text.strip()
 
@@ -683,7 +702,12 @@ def handle_select_order_for_deletion(message):
                 client_data['orders'] = new_orders
                 data[selected_client_id] = client_data
                 save_data('data.json', data)
+                markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+                markup.add(KeyboardButton("Buyurtma qo'shish"), KeyboardButton("Buyurtmani o'chirish"))
+                markup.add(KeyboardButton("Mijoz ma'lumotlarini o'zgartirish"), KeyboardButton("Buyurtmalarni ko'rish"))
                 bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} o`chirildi.")
+                bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
+                print("Back to menu")
 
         # Reset state
         user_states[user_id] = None
