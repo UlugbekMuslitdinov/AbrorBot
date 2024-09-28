@@ -376,7 +376,12 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
             'total_debt': total_debt
         }
         orders.append(order)
-        user_data['orders'] = orders  # Update the user data with the new order list
+        user_data['orders'] = orders
+
+        # Update the user's debt by adding the total_debt of the new order
+        user_data['debt'] += debt
+
+        # Save updated user data
         save_data('data.json', data)
 
 
@@ -408,13 +413,11 @@ def list_orders(user_id):
         orders = {}
         for user_id, user_data in data.items():
             if user_data.get('type') == 'client':
-                orders.update({" ".join([user_data.get('first_name', ""),
-                                         user_data.get('Last_name', "")]): user_data.get('orders', [])})
+                # Include the first name, last name, and debt for each client
+                user_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
+                debt = user_data.get('debt', 0)
+                orders.update({f"{user_name} \nQarz: {debt} сум": user_data.get('orders', [])})
         if orders:
-            # return "\n".join(
-            #     [f"Mijoz: {user_id}\n" + "\n".join(
-            #         [f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}" for
-            #          order in orders if orders]) for user_id, orders in orders.items() if orders])
             message = ""
             for user_id, orders in orders.items():
                 message += f"Mijoz: {user_id}\n"
@@ -423,7 +426,7 @@ def list_orders(user_id):
                         message += f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}\n"
                     message += "\n"
                 else:
-                    message += "Buyurtmalari topilmadi.\n"
+                    message += "Buyurtmalari topilmadi.\n\n"
             return message
         else:
             return "Buyurtmalar topilmadi."
