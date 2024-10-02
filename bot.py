@@ -1,6 +1,7 @@
 import json
 import telebot
 from telebot.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
+from functools import wraps
 
 TOKEN = '7099572080:AAH6FYY_KDVrCgvhVa8CgV2ZdTIESi0JZEw'
 
@@ -33,6 +34,17 @@ def redirect_to_command(message):
     else:
         bot.send_message(message.chat.id, "Noto`g`ri buyruq. Iltimos, quyidagi buyruqlardan birini tanlang:")
         bot.send_message(message.chat.id, "\n".join(commands_list))
+
+
+# Wrapper to check if user exists for each command
+def user_command_wrapper(func):
+    def wrapper(message):
+        user_id = str(message.from_user.id)
+        if not user_exists(user_id):
+            bot.send_message(message.chat.id, "Sizning profilingiz topilmadi. Iltimos, foydalanishni boshlash uchun /start ni kiriting.")
+        else:
+            func(message)
+    return wrapper
 
 
 # Функция для загрузки данных из JSON-файла
@@ -114,6 +126,7 @@ def get_max_order_id():
 
 # Admin selects a client to edit
 @bot.message_handler(func=lambda message: message.text == "/edit_client" or message.text == "Mijoz ma'lumotlarini o'zgartirish")
+@user_command_wrapper
 def handle_edit_client(message):
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
@@ -145,6 +158,7 @@ def handle_edit_client(message):
 
 # Handle the selection of a client for editing
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client_for_edit')
+@user_command_wrapper
 def handle_select_client_for_edit(message):
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
@@ -180,6 +194,7 @@ def handle_select_client_for_edit(message):
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familiya"))
         markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
+        markup.add(KeyboardButton("Mijozni o'chirish"))  # New option to delete the client
         markup.add(KeyboardButton("Bosh menyu"))
         user_states[user_id] = 'choosing_field_to_edit'
         bot.send_message(message.chat.id, "Qaysi maydonni o'zgartirish?", reply_markup=markup)
@@ -190,6 +205,7 @@ def handle_select_client_for_edit(message):
 
 # Handle field selection for editing
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'choosing_field_to_edit')
+@user_command_wrapper
 def handle_choose_field_to_edit(message):
     user_id = str(message.from_user.id)
     field_choice = message.text.strip()
@@ -202,7 +218,14 @@ def handle_choose_field_to_edit(message):
         redirect_to_command(message)
         return
 
-    if field_choice in ["Username", "Ism", "Familiya", "Sistemadagi Ism", "Qarzi", "Type"]:
+    if field_choice == "Mijozni o'chirish":
+        # Confirm client deletion
+        selected_client_id = admin_selected_clients.get(user_id)
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add(KeyboardButton("Ha"), KeyboardButton("Yo'q"))
+        user_states[user_id] = 'confirming_client_deletion'
+        bot.send_message(message.chat.id, f"Siz haqiqatan ham mijozni o'chirishni xohlaysizmi? ({selected_client_id})", reply_markup=markup)
+    elif field_choice in ["Username", "Ism", "Familiya", "Sistemadagi Ism", "Qarzi", "Type"]:
         # Special handling for 'Type' to show buttons
         if field_choice == "Type":
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
@@ -217,6 +240,51 @@ def handle_choose_field_to_edit(message):
             bot.send_message(message.chat.id, f"Yangi {field_choice.lower()} kiriting:", reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "Invalid choice. Please select a valid field.")
+
+
+# Function to check if user exists
+def user_exists(user_id):
+    data = load_data('data.json')
+    return user_id in data
+
+
+# Handle client deletion confirmation
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'confirming_client_deletion')
+@user_command_wrapper
+def handle_confirm_client_deletion(message):
+    user_id = str(message.from_user.id)
+    confirmation = message.text.strip()
+
+    if confirmation == "Ha":
+        # Proceed to delete the client
+        selected_client_id = admin_selected_clients.get(user_id)
+        data = load_data('data.json')
+
+        if selected_client_id in data:
+            # Send a message to the deleted user
+            try:
+                bot.send_message(selected_client_id, "Sizning profilingiz o'chirildi. Bottan foydalanish uchun /start ni kiriting.")
+            except Exception as e:
+                print(f"Could not send message to deleted user: {e}")
+
+            del data[selected_client_id]
+            save_data('data.json', data)
+            bot.send_message(message.chat.id, f"Mijoz ({selected_client_id}) muvaffaqiyatli o'chirildi.")
+        else:
+            bot.send_message(message.chat.id, "Mijoz topilmadi.")
+        
+        # Reset state and return to menu
+        user_states[user_id] = None
+        admin_selected_clients[user_id] = None
+        back_to_menu(message)
+    elif confirmation == "Yo'q":
+        bot.send_message(message.chat.id, "Mijoz o'chirilmaydi.")
+        # Reset state and return to menu
+        user_states[user_id] = None
+        admin_selected_clients[user_id] = None
+        back_to_menu(message)
+    else:
+        bot.send_message(message.chat.id, "Noto`g'ri tanlov. Iltimos, 'Ha' yoki 'Yo'q' ni tanlang.")
 
 
 # Handle updating the selected field
@@ -306,9 +374,9 @@ def start(message):
         bot.send_message(message.chat.id, f"Salom, {message.from_user.first_name}! Sizning ma`lumotlarinigiz saqlandi.")
     else:
         # Ensure the 'orders' key exists for existing users
-        if 'orders' not in data[user_id]:
-            data[user_id]['orders'] = []
-            save_data('data.json', data)
+        # if 'orders' not in data[user_id]:
+        #     data[user_id]['orders'] = []
+        #     save_data('data.json', data)
         bot.send_message(message.chat.id, f"Qaytadan salom, {message.from_user.first_name}!")
     back_to_menu(message)
 
@@ -459,25 +527,18 @@ def list_products(user_id, order_id):
         orders = user_data.get('orders', [])
         for order in orders:
             if order['order_id'] == order_id:
-                products = order.get('products', [])
+                # Filter products with quantity greater than 0
+                products = [product for product in order['products'] if product['product_quantity'] > 0]
                 if products:
                     return "\n".join([
                         f"Mahsulot: {product['product_name']}, Narx: {product['product_price']}, "
                         f"Miqdori: {product['product_quantity']}"
-                        for product in products])
+                        for product in products
+                    ])
                 else:
                     return "Mahsulot topilmadi."
         return "Buyurtma topilmadi."
     return "Mijoz topilmadi."
-
-
-# Example function to add a product
-def add_product(product_name, product_price, product_quantity):
-    return {
-        'product_name': product_name,
-        'product_price': product_price,
-        'product_quantity': product_quantity
-    }
 
 
 # Step 1: Handle the /add_order command or the "Buyurtma qo'shish" button
@@ -504,6 +565,7 @@ def handle_add_order(message):
 
 # Step 2: Handle the selection of a client or creating a new client
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client')
+@user_command_wrapper
 def handle_select_client(message):
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
@@ -536,6 +598,7 @@ def handle_select_client(message):
 
 # Step 3: Handle the creation of a new client
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'creating_client')
+@user_command_wrapper
 def handle_create_client(message):
     if message.text == "Bosh menyu":
         back_to_menu(message)
@@ -575,6 +638,7 @@ def handle_create_client(message):
 
 # Step 4: Handle the user's input data for orders
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'awaiting_order_data')
+@user_command_wrapper
 def receive_order_data(message):
     user_id = str(message.from_user.id)
     user_input = message.text.strip()
@@ -606,6 +670,7 @@ def receive_order_data(message):
 
 # Example of using delete_order function
 @bot.message_handler(func=lambda message: message.text == "/delete_order" or message.text == "Buyurtmani o'chirish")
+@user_command_wrapper
 def handle_delete_order(message):
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
@@ -640,6 +705,7 @@ def handle_delete_order(message):
 # Handle the selection of a client for deleting an order
 @bot.message_handler(
     func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client_for_order_deletion')
+@user_command_wrapper
 def handle_select_client_for_order_deletion(message):
     if message.text == "Bosh menyu":
         back_to_menu(message)
@@ -682,6 +748,7 @@ def handle_select_client_for_order_deletion(message):
 
 # Handle the selection of an order to delete
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
+@user_command_wrapper
 def handle_select_order_for_deletion(message):
     user_id = str(message.from_user.id)
     order_choice = message.text.strip()
@@ -722,17 +789,29 @@ def handle_select_order_for_deletion(message):
 
 # Handle the /list_orders command
 @bot.message_handler(func=lambda message: message.text == "/list_orders" or message.text == "Buyurtmalarni ko'rish")
+@user_command_wrapper
 def handle_list_orders(message):
     user_id = str(message.from_user.id)
 
     if is_client(user_id):
         orders_list = list_orders(user_id)  # Clients can only list their own orders
-        bot.send_message(message.chat.id, orders_list)
-        bot.send_message(message.chat.id, f"Qarz: {get_debt(user_id)}")
+        total_debt = get_debt(user_id)
+        combined_message = f"Qarz: {total_debt} сўм \n{orders_list}"
+        bot.send_message(message.chat.id, combined_message)
+
+         # If the client has orders, prompt to see products
+        if "Buyurtma ID" in orders_list:
+            bot.send_message(message.chat.id, "Buyurtmaning mahsulotlarini ko'rish uchun buyurtma ID ni yuboring. Masalan: /list_products 1")
+
     elif is_admin(user_id):
         # Admins can list all orders
         orders_list = list_orders(user_id)
         bot.send_message(message.chat.id, orders_list)
+
+         # If there are any orders, prompt to see products
+        if "Buyurtma ID" in orders_list:
+            bot.send_message(message.chat.id, "Buyurtmaning mahsulotlarini ko'rish uchun buyurtma ID ni yuboring. Masalan: /list_products 1")
+
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmalar ro`yxati ko`rishga ruxsat yo`q.")
     back_to_menu(message)
@@ -740,6 +819,7 @@ def handle_list_orders(message):
 
 # Handle the /list_products command
 @bot.message_handler(commands=['list_products'])
+@user_command_wrapper
 def handle_list_products(message):
     user_id = str(message.from_user.id)
     command_parts = message.text.split()
@@ -749,11 +829,37 @@ def handle_list_products(message):
         return
 
     order_id = command_parts[1]  # Extract order ID from the message
-    products_list = list_products(user_id, order_id)
-    bot.send_message(message.chat.id, products_list)
+
+    # Search for the order by ID across all users if the requester is an admin
+    if is_admin(user_id):
+        data = load_data('data.json')
+        for client_id, client_data in data.items():
+            orders = client_data.get('orders', [])
+            for order in orders:
+                if order['order_id'] == order_id:
+                    # Filter products with quantity greater than 0
+                    products = [product for product in order['products'] if product['product_quantity'] > 0]
+                    products_list = "\n".join([
+                        f"Mahsulot: {product['product_name']}, Narx: {product['product_price']}, "
+                        f"Miqdori: {product['product_quantity']}"
+                        for product in products
+                    ])
+                    if not products_list:
+                        products_list = "Mahsulotlar topilmadi."
+                    bot.send_message(message.chat.id, products_list)
+                    return
+        # If no order found
+        bot.send_message(message.chat.id, f"Buyurtma ID {order_id} topilmadi.")
+    elif is_client(user_id):
+        # Clients can only list their own products
+        products_list = list_products(user_id, order_id)
+        bot.send_message(message.chat.id, products_list)
+    else:
+        bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rishga ruxsat yo'q.")
 
 
-@bot.message_handler(commands=['help'])
+@bot.message_handler(func=lambda message: message.text == "/help")
+@user_command_wrapper
 def help(message):
     user_id = str(message.from_user.id)
 
