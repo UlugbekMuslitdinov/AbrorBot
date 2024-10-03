@@ -1,5 +1,6 @@
 import json
 import telebot
+from telebot import types
 from telebot.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton
 from functools import wraps
 
@@ -122,6 +123,22 @@ def get_max_order_id():
                     max_id = order_id
     print("Max order ID:", max_id)
     return max_id
+
+
+def migrate_data():
+    data = load_data('data.json')
+    for user_id, user_data in data.items():
+        if 'saved_name' not in user_data:
+            user_data['saved_name'] = ''
+        if 'debt' not in user_data:
+            user_data['debt'] = 0
+        if 'orders' not in user_data:
+            user_data['orders'] = []
+        if user_data['orders']:
+            for order in user_data['orders']:
+                if 'is_confirmed' not in order:
+                    order['is_confirmed'] = False
+    save_data('data.json', data)
 
 
 # Admin selects a client to edit
@@ -358,6 +375,7 @@ def handle_edit_field(message):
 @bot.message_handler(commands=['start'])
 def start(message):
     data = load_data('data.json')
+    migrate_data()
     user_id = str(message.from_user.id)
 
     if str(user_id) not in data:
@@ -441,7 +459,8 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
             'products': products,
             'total_sum': total_sum,
             'total_quantity': total_quantity,
-            'total_debt': total_debt
+            'total_debt': total_debt,
+            'is_confirmed': False
         }
         orders.append(order)
         user_data['orders'] = orders
@@ -472,6 +491,18 @@ def delete_order(user_id, order_id):
     return False  # User ID not found
 
 
+def print_orders(orders):
+    message = ""
+    for order in orders:
+        message += f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']} "
+        if order['is_confirmed']:
+            message += "Tasdiqlangan\n"
+        else:
+            message += "Tasdiqlanmagan\n"
+        message += "\n"
+    return message
+
+
 # Function to list all orders for a user
 def list_orders(user_id):
     data = load_data('data.json')
@@ -491,7 +522,12 @@ def list_orders(user_id):
                 message += f"Mijoz: {user_id}\n"
                 if orders:
                     for order in orders:
-                        message += f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}\n"
+                        message += (f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, "
+                                    f"sana: {order['order_date']}, ")
+                        if order['is_confirmed']:
+                            message += "Tasdiqlangan\n"
+                        else:
+                            message += "Tasdiqlanmagan\n"
                     message += "\n"
                 else:
                     message += "Buyurtmalari topilmadi.\n\n"
@@ -502,9 +538,7 @@ def list_orders(user_id):
     if user_data:
         orders = user_data.get('orders', [])
         if orders:
-            return "\n".join(
-                [f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']}" for
-                 order in orders])
+            return print_orders(orders)
         else:
             return "Buyurtma topilmadi."
     return "Mijoz topilmadi."
@@ -657,7 +691,14 @@ def receive_order_data(message):
             saved_name, debt, order_date, products, total_sum, total_quantity, total_debt = parse_order_input(
                 user_input)
             add_order(selected_client_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt)
-            bot.send_message(message.chat.id, "Buyurtma muvaffaqiyatli qo`shildi.")
+            # Send notification to the client witha button to confirm the order
+            buttons = types.InlineKeyboardMarkup()
+            buttons.add(types.InlineKeyboardButton(text="Buyurtmani tasdiqlash",
+                                                   callback_data=f"confirm_order {total_sum}"))
+            bot.send_message(selected_client_id, f"Buyurtma muvaffaqiyatli qo`shildi. Jami summa: {total_sum} сўм",
+                             reply_markup=buttons)
+            user_states[selected_client_id] = ['confirming_order', message.chat.id]
+            bot.send_message(message.chat.id, "Buyurtma muvaffaqiyatli qo`shildi va mijozga yetkazildi.")
             back_to_menu(message)
         except Exception as e:
             bot.send_message(message.chat.id, f"Buyurtma noto`g`ri kiritilgan {e}")
@@ -666,6 +707,20 @@ def receive_order_data(message):
             admin_selected_clients[user_id] = None
     else:
         bot.send_message(message.chat.id, "Mijoz tanlanmagan. Iltimos, qaytadan urinib ko`ring.")
+
+
+@bot.callback_query_handler(func=lambda call: user_states.get(str(call.from_user.id))[0] == 'confirming_order')
+def handle_confirm_order(call):
+    user_id = str(call.from_user.id)
+    user_data = load_data('data.json').get(user_id, {})
+    if call.data.startswith("confirm_order"):
+        bot.send_message(call.message.chat.id, f"Buyurtma tasdiqlandi. Qarz: {user_data['debt']} сўм")
+        user_data['orders'][-1]['is_confirmed'] = True
+        save_data('data.json', load_data('data.json'))
+        bot.send_message(user_states[user_id][1], f"{user_data['first_name']} {user_data['last_name']}"
+                                                  f" buyurtmasi tasdiqlandi.")
+        user_states[user_id] = None
+        back_to_menu(call.message)
 
 
 # Example of using delete_order function
