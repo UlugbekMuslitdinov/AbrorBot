@@ -467,6 +467,9 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
 
         # Update the user's debt by adding the total_debt of the new order
         # user_data['debt'] += debt
+        user_data['debt'] += total_sum
+        # Здесь нужно поменять и сделать user_data['debt'] += total_sum 
+        # Тогда к исходному долгу одного юзера будет прибовляться сумма заказа
 
         # Save updated user data
         save_data('data.json', data)
