@@ -466,7 +466,7 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
         user_data['orders'] = orders
 
         # Update the user's debt by adding the total_debt of the new order
-        user_data['debt'] += debt
+        # user_data['debt'] += debt
 
         # Save updated user data
         save_data('data.json', data)
@@ -695,6 +695,8 @@ def receive_order_data(message):
             buttons = types.InlineKeyboardMarkup()
             buttons.add(types.InlineKeyboardButton(text="Buyurtmani tasdiqlash",
                                                    callback_data=f"confirm_order {total_sum}"))
+            buttons.add(types.InlineKeyboardButton(text="Buyurtmani bekor qilish",
+                                                    callback_data=f"cancel_order {total_sum}"))
             bot.send_message(selected_client_id, f"Buyurtma muvaffaqiyatli qo`shildi. Jami summa: {total_sum} сўм",
                              reply_markup=buttons)
             user_states[selected_client_id] = ['confirming_order', message.chat.id]
@@ -712,13 +714,24 @@ def receive_order_data(message):
 @bot.callback_query_handler(func=lambda call: user_states.get(str(call.from_user.id))[0] == 'confirming_order')
 def handle_confirm_order(call):
     user_id = str(call.from_user.id)
-    user_data = load_data('data.json').get(user_id, {})
+    user_data = load_data('data.json').get(user_id, None)
     if call.data.startswith("confirm_order"):
+        total_sum = int(call.data.split()[-1])
+        user_data['debt'] += total_sum
         bot.send_message(call.message.chat.id, f"Buyurtma tasdiqlandi. Qarz: {user_data['debt']} сўм")
         user_data['orders'][-1]['is_confirmed'] = True
-        save_data('data.json', load_data('data.json'))
+        data = load_data('data.json')
+        data[user_id] = user_data
+        save_data('data.json', data)
         bot.send_message(user_states[user_id][1], f"{user_data['first_name']} {user_data['last_name']}"
                                                   f" buyurtmasi tasdiqlandi.")
+        user_states[user_id] = None
+        back_to_menu(call.message)
+    elif call.data.startswith("cancel_order"):
+        bot.send_message(call.message.chat.id, f"Buyurtma bekor qilindi. Qarz: {user_data['debt']} сўм")
+        save_data('data.json', load_data('data.json'))
+        bot.send_message(user_states[user_id][1], f"{user_data['first_name']} {user_data['last_name']}"
+                                                  f" buyurtmasi bekor qilindi.")
         user_states[user_id] = None
         back_to_menu(call.message)
 
