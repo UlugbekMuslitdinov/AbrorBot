@@ -407,7 +407,7 @@ def parse_order_input(message_text):
     first_line = lines[0].split("  ")
     saved_name = first_line[0]
     debt = int("".join((first_line[2].split())[:-1]))
-    order_date = first_line[-1]
+    order_date = first_line[-1].replace(",", "/")
 
     # Skip header line "Наименование товара  Цена  Количество(кб)  Оплата  Перечисление  Остаток долга"
     product_lines = lines[2:-2]
@@ -497,7 +497,8 @@ def delete_order(user_id, order_id):
 def print_orders(orders):
     message = ""
     for order in orders:
-        message += f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, sana: {order['order_date']} "
+        formatted_total_sum = "{:,}".format(order['total_sum']).replace(",", " ")
+        message += f"Buyurtma ID: {order['order_id']}, miqdor: {formatted_total_sum}, sana: {order['order_date']} "
         if order['is_confirmed']:
             message += "Tasdiqlangan\n"
         else:
@@ -518,14 +519,16 @@ def list_orders(user_id):
                 # Include the first name, last name, and debt for each client
                 user_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
                 debt = user_data.get('debt', 0)
-                orders.update({f"{user_name} \nQarz: {debt} сум": user_data.get('orders', [])})
+                formatted_debt = "{:,}".format(debt).replace(",", " ")
+                orders.update({f"{user_name} \nQarz: {formatted_debt} сум": user_data.get('orders', [])})
         if orders:
             message = ""
             for user_id, orders in orders.items():
                 message += f"Mijoz: {user_id}\n"
                 if orders:
                     for order in orders:
-                        message += (f"Buyurtma ID: {order['order_id']}, miqdor: {order['total_sum']}, "
+                        formatted_total_sum = "{:,}".format(order['total_sum']).replace(",", " ")
+                        message += (f"Buyurtma ID: {order['order_id']}, miqdor: {formatted_total_sum}, "
                                     f"sana: {order['order_date']}, ")
                         if order['is_confirmed']:
                             message += "Tasdiqlangan\n"
@@ -568,7 +571,7 @@ def list_products(user_id, order_id):
                 products = [product for product in order['products'] if product['product_quantity'] > 0]
                 if products:
                     return "\n".join([
-                        f"Mahsulot: {product['product_name']}, Narx: {product['product_price']}, "
+                        f"Mahsulot: {product['product_name']}, Narx: {'{:,}'.format(product['product_price']).replace(',', ' ')}, "
                         f"Miqdori: {product['product_quantity']}"
                         for product in products
                     ])
@@ -867,7 +870,8 @@ def handle_list_orders(message):
     if is_client(user_id):
         orders_list = list_orders(user_id)  # Clients can only list their own orders
         total_debt = get_debt(user_id)
-        combined_message = f"Qarz: {total_debt} сўм \n{orders_list}"
+        formatted_debt = "{:,}".format(total_debt).replace(",", " ")
+        combined_message = f"Qarz: {formatted_debt} сўм \n{orders_list}"
         bot.send_message(message.chat.id, combined_message)
 
          # If the client has orders, prompt to see products
