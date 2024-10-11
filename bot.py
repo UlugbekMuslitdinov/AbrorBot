@@ -406,8 +406,10 @@ def parse_order_input(message_text):
     # Extract saved name, debt, and order date from the first line
     first_line = lines[0].split("  ")
     saved_name = first_line[0]
-    debt = int("".join((first_line[2].split())[:-1]))
-    order_date = first_line[-1].replace(",", "/")
+
+    debt = int("".join(((lines[-2].split("  "))[-1]).split()[:-1]))
+    order_date = first_line[-1]
+
 
     # Skip header line "Наименование товара  Цена  Количество(кб)  Оплата  Перечисление  Остаток долга"
     product_lines = lines[2:-2]
@@ -467,11 +469,14 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
 
         # Update the user's debt by adding the total_debt of the new order
         # user_data['debt'] += debt
-        user_data['debt'] += total_sum
+        user_data['total_debt'] = debt
+        print(debt, "total_debt")
+        print(user_data['total_debt'])
         # Здесь нужно поменять и сделать user_data['debt'] += total_sum 
         # Тогда к исходному долгу одного юзера будет прибовляться сумма заказа
 
         # Save updated user data
+        data[user_id] = user_data
         save_data('data.json', data)
 
 
@@ -518,17 +523,17 @@ def list_orders(user_id):
             if user_data.get('type') == 'client':
                 # Include the first name, last name, and debt for each client
                 user_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
-                debt = user_data.get('debt', 0)
-                formatted_debt = "{:,}".format(debt).replace(",", " ")
-                orders.update({f"{user_name} \nQarz: {formatted_debt} сум": user_data.get('orders', [])})
+                debt = user_data.get('total_debt', 0)
+
+                orders.update({f"{user_name} \nQarz: {'{:,}'.format(debt)} сум": user_data.get('orders', [])})
         if orders:
             message = ""
             for user_id, orders in orders.items():
                 message += f"Mijoz: {user_id}\n"
                 if orders:
                     for order in orders:
-                        formatted_total_sum = "{:,}".format(order['total_sum']).replace(",", " ")
-                        message += (f"Buyurtma ID: {order['order_id']}, miqdor: {formatted_total_sum}, "
+
+                        message += (f"Buyurtma ID: {order['order_id']}, miqdor: {'{:,}'.format(order['total_sum'])}, "
                                     f"sana: {order['order_date']}, ")
                         if order['is_confirmed']:
                             message += "Tasdiqlangan\n"
@@ -554,7 +559,7 @@ def get_debt(user_id):
     data = load_data('data.json')
     user_data = data.get(user_id, None)
     if user_data:
-        return user_data.get('debt', 0)
+        return user_data.get('total_debt', 0)
     return 0
 
 
@@ -870,8 +875,7 @@ def handle_list_orders(message):
     if is_client(user_id):
         orders_list = list_orders(user_id)  # Clients can only list their own orders
         total_debt = get_debt(user_id)
-        formatted_debt = "{:,}".format(total_debt).replace(",", " ")
-        combined_message = f"Qarz: {formatted_debt} сўм \n{orders_list}"
+        combined_message = f"Qarz: {':,'.format(total_debt)} сўм \n{orders_list}"
         bot.send_message(message.chat.id, combined_message)
 
          # If the client has orders, prompt to see products
