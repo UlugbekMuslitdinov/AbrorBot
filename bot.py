@@ -408,7 +408,9 @@ def parse_order_input(message_text):
     saved_name = first_line[0]
 
     debt = int("".join(((lines[-2].split("  "))[-1]).split()[:-1]))
-    order_date = first_line[-1]
+    
+    # Format the order date by replacing commas with slashes
+    order_date = first_line[-1].replace(",", "/")
 
 
     # Skip header line "Наименование товара  Цена  Количество(кб)  Оплата  Перечисление  Остаток долга"
@@ -871,11 +873,13 @@ def handle_select_order_for_deletion(message):
 @user_command_wrapper
 def handle_list_orders(message):
     user_id = str(message.from_user.id)
+    data = load_data('data.json')
+    user_data = data.get(user_id, None)
 
     if is_client(user_id):
         orders_list = list_orders(user_id)  # Clients can only list their own orders
-        total_debt = get_debt(user_id)
-        combined_message = f"Qarz: {':,'.format(total_debt)} сўм \n{orders_list}"
+        debt = user_data.get('total_debt', 0)
+        combined_message = f"Qarz: {'{:,}'.format(debt)} сўм \n{orders_list}"
         bot.send_message(message.chat.id, combined_message)
 
          # If the client has orders, prompt to see products
