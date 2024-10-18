@@ -407,7 +407,8 @@ def parse_order_input(message_text):
     first_line = lines[0].split("  ")
     saved_name = first_line[0]
 
-    debt = int("".join(((lines[-2].split("  "))[-1]).split()[:-1]))
+    debt = "".join(((lines[-2].split("  "))[-1]).split()[:-1])
+    debt = int(debt)
     
     # Format the order date by replacing commas with slashes
     order_date = first_line[-1].replace(",", "/")
@@ -425,7 +426,7 @@ def parse_order_input(message_text):
 
         product_name = parts[0]
         price_str = "".join(parts[1].split()[:-1])
-        product_price = int(price_str) if price_str else ""
+        product_price = int(price_str) if price_str else 0
 
         product_quantity = int(parts[2]) if parts[2] != "" else 0
 
@@ -439,8 +440,10 @@ def parse_order_input(message_text):
     # Extract the final summary line (Jami summa)
     summary_line = lines[-1].split("  ")
     second_last = lines[-2].split("  ")
-    total_sum = int("".join(second_last[1].split()[:-1]))
-    total_quantity = int(summary_line[2])
+    total_sum = "".join(second_last[1].split()[:-1])
+    total_sum = int(total_sum)
+    total_quantity = summary_line[2]
+    total_quantity = int(total_quantity)
     total_debt = int("".join(summary_line[-1].split()[:-1]))
 
     return saved_name, debt, order_date, products, total_sum, total_quantity, total_debt
@@ -471,9 +474,7 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
 
         # Update the user's debt by adding the total_debt of the new order
         # user_data['debt'] += debt
-        user_data['total_debt'] = debt
-        print(debt, "total_debt")
-        print(user_data['total_debt'])
+        user_data['debt'] = debt
         # Здесь нужно поменять и сделать user_data['debt'] += total_sum 
         # Тогда к исходному долгу одного юзера будет прибовляться сумма заказа
 
