@@ -552,7 +552,15 @@ def list_orders(user_id):
     if user_data:
         orders = user_data.get('orders', [])
         if orders:
-            return print_orders(orders)
+            message = ""
+            for order in orders:
+                formatted_total_sum = "{:,}".format(order['total_sum']).replace(",", " ")
+                message += (f"Buyurtma ID: {order['order_id']}, Miqdor: {formatted_total_sum} so'm, "
+                            f"Sana: {order['order_date']}\n")
+
+                # Call list_products to include products for each order
+                message += list_products(user_id, order['order_id']) + "\n\n"
+            return message
         else:
             return "Buyurtma topilmadi."
     return "Mijoz topilmadi."
@@ -882,10 +890,6 @@ def handle_list_orders(message):
         debt = user_data.get('total_debt', 0)
         combined_message = f"Qarz: {'{:,}'.format(debt)} сўм \n{orders_list}"
         bot.send_message(message.chat.id, combined_message)
-
-         # If the client has orders, prompt to see products
-        if "Buyurtma ID" in orders_list:
-            bot.send_message(message.chat.id, "Buyurtmaning mahsulotlarini ko'rish uchun buyurtma ID ni yuboring. Masalan: /list_products 1")
 
     elif is_admin(user_id):
         # Admins can list all orders
