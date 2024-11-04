@@ -63,6 +63,36 @@ def save_data(filename, data):
         json.dump(data, file, indent=4)
 
 
+def migrate_data():
+    # Each order should contain the following fields:
+    # - order_id
+    # - saved_name
+    # - debt
+    # - order_date
+    # - products (list of dictionaries with keys: product_name, product_price, product_quantity)
+    # - total_sum
+    # - total_quantity
+    # - total_debt
+    # - before_order_debt
+    # - is_confirmed
+    data = load_data('data.json')
+    for user_id, user_data in data.items():
+        if 'saved_name' not in user_data:
+            user_data['saved_name'] = ''
+        if 'debt' not in user_data:
+            user_data['debt'] = 0
+        if 'orders' not in user_data:
+            user_data['orders'] = []
+        if user_data['orders']:
+            for order in user_data['orders']:
+                if 'is_confirmed' not in order:
+                    order['is_confirmed'] = False
+                if 'before_order_debt' not in order:
+                    order['before_order_debt'] = 0
+    save_data('data.json', data)
+
+
+
 # Check if user is an admin
 def is_admin(user_id):
     data = load_data('data.json')
@@ -125,21 +155,6 @@ def get_max_order_id():
     return max_id
 
 
-def migrate_data():
-    data = load_data('data.json')
-    for user_id, user_data in data.items():
-        if 'saved_name' not in user_data:
-            user_data['saved_name'] = ''
-        if 'debt' not in user_data:
-            user_data['debt'] = 0
-        if 'orders' not in user_data:
-            user_data['orders'] = []
-        if user_data['orders']:
-            for order in user_data['orders']:
-                if 'is_confirmed' not in order:
-                    order['is_confirmed'] = False
-    save_data('data.json', data)
-
 
 # Admin selects a client to edit
 @bot.message_handler(func=lambda message: message.text == "/edit_client" or message.text == "Mijoz ma'lumotlarini o'zgartirish")
@@ -162,7 +177,10 @@ def handle_edit_client(message):
         if clients:
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for client_id, client_data in clients.items():
-                markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
+                if client_data['last_name'] == '' or client_data['last_name'] is None:
+                    markup.add(KeyboardButton(f"{client_data['first_name']} ({client_id})"))
+                else:
+                    markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
             markup.add(KeyboardButton("Bosh menyu"))
 
             user_states[user_id] = 'selecting_client_for_edit'
@@ -402,10 +420,13 @@ def start(message):
 # Function to parse user input and create an order
 def parse_order_input(message_text):
     lines = message_text.strip().split("\n")
+    print(lines)
 
     # Extract saved name, debt, and order date from the first line
     first_line = lines[0].split("  ")
     saved_name = first_line[0]
+    before_order_debt = int("".join(first_line[2].split()[:-1]))
+    print(before_order_debt)
 
     debt = "".join(((lines[-2].split("  "))[-1]).split()[:-1])
     debt = int(debt)
@@ -446,11 +467,11 @@ def parse_order_input(message_text):
     total_quantity = int(total_quantity)
     total_debt = int("".join(summary_line[-1].split()[:-1]))
 
-    return saved_name, debt, order_date, products, total_sum, total_quantity, total_debt
+    return saved_name, debt, order_date, products, total_sum, total_quantity, total_debt, before_order_debt
 
 
 # Function to add an order from parsed input
-def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt):
+def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt, before_order_debt):
     data = load_data('data.json')
     user_data = data.get(user_id, None)
 
@@ -467,8 +488,10 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
             'total_sum': total_sum,
             'total_quantity': total_quantity,
             'total_debt': total_debt,
-            'is_confirmed': False
+            'is_confirmed': False,
+            'before_order_debt': before_order_debt
         }
+        print(before_order_debt)
         orders.append(order)
         user_data['orders'] = orders
 
@@ -608,7 +631,10 @@ def handle_add_order(message):
         if clients:
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for client_id, client_data in clients.items():
-                markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
+                if client_data['last_name'] == '' or client_data['last_name'] is None:
+                    markup.add(KeyboardButton(f"{client_data['first_name']} ({client_id})"))
+                else:
+                    markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
             markup.add(KeyboardButton("Bosh menyu"))
 
             user_states[user_id] = 'selecting_client'
@@ -710,9 +736,9 @@ def receive_order_data(message):
 
     if selected_client_id:
         try:
-            saved_name, debt, order_date, products, total_sum, total_quantity, total_debt = parse_order_input(
+            saved_name, debt, order_date, products, total_sum, total_quantity, total_debt, before_order_debt = parse_order_input(
                 user_input)
-            add_order(selected_client_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt)
+            add_order(selected_client_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt, before_order_debt)
             # Send notification to the client witha button to confirm the order
             buttons = types.InlineKeyboardMarkup()
             buttons.add(types.InlineKeyboardButton(text="Buyurtmani tasdiqlash",
@@ -779,7 +805,10 @@ def handle_delete_order(message):
         if clients:
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for client_id, client_data in clients.items():
-                markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
+                if client_data['last_name'] == '' or client_data['last_name'] is None:
+                    markup.add(KeyboardButton(f"{client_data['first_name']} ({client_id})"))
+                else:
+                    markup.add(KeyboardButton(f"{client_data['first_name']} {client_data['last_name']} ({client_id})"))
             markup.add(KeyboardButton("Bosh menyu"))
 
             user_states[user_id] = 'selecting_client_for_order_deletion'
@@ -925,6 +954,8 @@ def handle_list_products(message):
             orders = client_data.get('orders', [])
             for order in orders:
                 if order['order_id'] == order_id:
+                    before_order_debt = order['before_order_debt']
+                    total_sum = order['debt']
                     # Filter products with quantity greater than 0
                     products = [product for product in order['products'] if product['product_quantity'] > 0]
                     products_list = "\n".join([
@@ -934,6 +965,7 @@ def handle_list_products(message):
                     ])
                     if not products_list:
                         products_list = "Mahsulotlar topilmadi."
+                    products_list = f"Savdodan avvalgi qarz: {before_order_debt} сўм\n\n" + products_list + f"\n\nJami summa: {total_sum} сўм"
                     bot.send_message(message.chat.id, products_list)
                     return
         # If no order found
