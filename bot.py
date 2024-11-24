@@ -30,7 +30,7 @@ def create_db_tables():
     conn = create_db_connection()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY AUTOINCREMENT , username TEXT, first_name TEXT, last_name TEXT, type TEXT, saved_name TEXT, debt INTEGER DEFAULT 0, telegram_id TEXT)''')
+                 (user_id INTEGER PRIMARY KEY AUTOINCREMENT , username TEXT, first_name TEXT, last_name TEXT, type TEXT DEFAULT client, saved_name TEXT, debt INTEGER DEFAULT 0, telegram_id TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS products
                     (product_id INTEGER PRIMARY KEY, product_name TEXT, product_price INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS itemInOrder
@@ -87,11 +87,12 @@ def is_admin(user_id):
 def is_client(user_id):
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM users")
-    data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
+    c.execute("SELECT type FROM users WHERE telegram_id=?", (user_id,))
+    user = c.fetchone()
     conn.close()
-    user_data = data.get(user_id, {})
-    return user_data.get('type') == 'client'
+    # Debug log
+    print(f"Debug: User ID {user_id}, Query Result: {user}")
+    return user is not None and user[0] == 'client'
 
 
 # Function to list all clients for admin to select
@@ -601,9 +602,14 @@ def list_orders(user_id):
 def list_orders_db(user_id):
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM orders WHERE user_id=?", (user_id,))
+    c.execute("""
+        SELECT o.* FROM orders o
+        JOIN users u ON o.user_id = u.user_id
+        WHERE u.telegram_id = ?
+    """, (user_id,))
     orders = c.fetchall()
     conn.close()
+    print(f"Debug: Orders for Telegram ID {user_id}: {orders}")  # Debug log
     return orders
 
 
@@ -1088,30 +1094,77 @@ def handle_select_order_for_deletion(message):
         admin_selected_clients[user_id] = None
 
 
+def get_client_full_name(user_id):
+    """
+    Retrieve the full name of a client from the database.
+    Handles cases where first_name or last_name may be NULL.
+    """
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT first_name, last_name FROM users WHERE user_id=?", (user_id,))
+    result = c.fetchone()
+    conn.close()
+
+    if result:
+        first_name, last_name = result
+        # Combine first_name and last_name, ignoring NULL (None) values
+        full_name = f"{first_name or ''} {last_name or ''}".strip()
+        return full_name if full_name else "Noma'lum"
+    return "Noma'lum"
+
+
 # Handle the /list_orders command
 @bot.message_handler(func=lambda message: message.text == "/list_orders" or message.text == "Buyurtmalarni ko'rish")
 @user_command_wrapper
 def handle_list_orders(message):
     user_id = str(message.from_user.id)
 
+    # Check if the user is a client
     if is_client(user_id):
-        orders_list = list_orders_db(user_id)  # Clients can only list their own orders
-        debt = get_user_debt(user_id) or 0
-        combined_message = f"Qarz: {'{:,}'.format(debt)} сўм \n{orders_list}"
-        bot.send_message(message.chat.id, combined_message)
+        # Retrieve the client's orders from the database
+        orders_list = list_orders_db(user_id)
+        if orders_list:
+            message_text = f"Sizning buyurtmalaringiz:\n\n"
+            for order in orders_list:
+                order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
+                formatted_order = (
+                    f"Buyurtma ID: {order_id}\n"
+                    f"Sana: {order_date}\n"
+                    f"Jami summa: {total_sum:,} so'm\n"
+                    f"Miqdor: {total_quantity}\n"
+                    f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
+                    f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
+                )
+                message_text += formatted_order
+            bot.send_message(message.chat.id, message_text)
+        else:
+            bot.send_message(message.chat.id, "Sizning buyurtmalaringiz topilmadi.")
 
     elif is_admin(user_id):
         # Admins can list all orders
         orders_list = list_orders_db_admin()
-        bot.send_message(message.chat.id, str(orders_list))
-
-        # If there are any orders, prompt to see products
-        if "Buyurtma ID" in orders_list:
-            bot.send_message(message.chat.id,
-                             "Buyurtmaning mahsulotlarini ko'rish uchun buyurtma ID ni yuboring. Masalan: /list_products 1")
-
+        if orders_list:
+            message_text = "Barcha buyurtmalar:\n\n"
+            for order in orders_list:
+                order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
+                full_name = get_client_full_name(user_id)
+                formatted_order = (
+                    f"Mijoz: {full_name or 'Noma`lum'}\n"
+                    f"Buyurtma ID: {order_id}\n"
+                    f"Sana: {order_date}\n"
+                    f"Jami summa: {total_sum:,} so'm\n"
+                    f"Miqdor: {total_quantity}\n"
+                    f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
+                    f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
+                )
+                message_text += formatted_order
+            bot.send_message(message.chat.id, message_text)
+        else:
+            bot.send_message(message.chat.id, "Buyurtmalar topilmadi.")
     else:
-        bot.send_message(message.chat.id, "Sizda buyurtmalar ro`yxati ko`rishga ruxsat yo`q.")
+        # If the user is neither a client nor an admin
+        bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rish uchun ruxsat yo'q.")
+
     back_to_menu(message)
 
 
@@ -1154,14 +1207,19 @@ def handle_list_products(message):
                     # Fetch products associated with this order
                     conn = create_db_connection()
                     c = conn.cursor()
-                    c.execute("SELECT * FROM itemInOrder WHERE order_id=?", (order_id,))
+                    c.execute("""
+                        SELECT p.product_name, io.quantity, io.price 
+                        FROM itemInOrder io 
+                        INNER JOIN products p ON io.product_id = p.product_id 
+                        WHERE io.order_id=?
+                    """, (order_id,))
                     products = c.fetchall()
                     conn.close()
 
                     # Prepare the product list
                     if products:
                         products_list = "\n".join([
-                            f"Mahsulot: {product[1]}, Narx: {product[3]}, Miqdori: {product[2]}"
+                            f"Mahsulot: {product[0]}, Miqdori: {product[1]}, Narxi: {product[2]}"
                             for product in products
                         ])
                     else:
@@ -1169,6 +1227,7 @@ def handle_list_products(message):
 
                     # Prepare and send the final message
                     products_list = (
+                        f"Mijoz: {first_name or ''} {last_name or ''}\n"
                         f"Savdodan avvalgi qarz: {before_order_debt} сўм\n\n"
                         + products_list
                         + f"\n\nJami summa: {total_sum} сўм"
@@ -1193,14 +1252,19 @@ def handle_list_products(message):
             # Fetch products associated with this order
             conn = create_db_connection()
             c = conn.cursor()
-            c.execute("SELECT * FROM itemInOrder WHERE order_id=?", (order_id,))
+            c.execute("""
+                SELECT p.product_name, io.quantity, io.price 
+                FROM itemInOrder io 
+                INNER JOIN products p ON io.product_id = p.product_id 
+                WHERE io.order_id=?
+            """, (order_id,))
             products = c.fetchall()
             conn.close()
 
             # Prepare the product list
             if products:
                 products_list = "\n".join([
-                    f"Mahsulot: {product[1]}, Narx: {product[3]}, Miqdori: {product[2]}"
+                    f"Mahsulot: {product[0]}, Miqdori: {product[1]}, Narxi: {product[2]}"
                     for product in products
                 ])
             else:
@@ -1217,6 +1281,7 @@ def handle_list_products(message):
             bot.send_message(message.chat.id, f"Buyurtma ID {order_id} topilmadi.")
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rishga ruxsat yo'q.")
+
 
 
 
