@@ -599,18 +599,28 @@ def list_orders(user_id):
     return "Mijoz topilmadi."
 
 
-def list_orders_db(user_id):
+def list_orders_db(telegram_id):
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute("""
-        SELECT o.* FROM orders o
-        JOIN users u ON o.user_id = u.user_id
-        WHERE u.telegram_id = ?
-    """, (user_id,))
+
+    # Fetch user_id from the telegram_id
+    c.execute("SELECT user_id FROM users WHERE telegram_id = ?", (telegram_id,))
+    user = c.fetchone()
+
+    if not user:
+        print(f"Debug: Telegram ID {telegram_id} not linked to any user.")
+        return []  # Return an empty list if no user is found
+
+    user_id = user[0]
+    print(f"Debug: Matched Telegram ID {telegram_id} to User ID {user_id}")
+
+    # Fetch orders for the user_id
+    c.execute("SELECT * FROM orders WHERE user_id = ?", (user_id,))
     orders = c.fetchall()
     conn.close()
-    print(f"Debug: Orders for Telegram ID {user_id}: {orders}")  # Debug log
+    print(f"Debug: Orders for User ID {user_id}: {orders}")
     return orders
+
 
 
 def get_user_debt(user_id):
@@ -1020,16 +1030,18 @@ def handle_select_client_for_order_deletion(message):
     try:
         # Extract client ID from the selected text (the ID is in parentheses)
         selected_client_id = client_choice.split('(')[-1].strip(')')
+        print(f"Debug: Extracted Selected Client ID: {selected_client_id}")
         admin_selected_clients[user_id] = selected_client_id
 
-        orders = list_orders_db(selected_client_id)
-        print(orders)
+        # Fetch orders by user_id (client ID in this case)
+        orders = fetch_orders_by_user_id(selected_client_id)  # New function to fetch orders directly by user_id
+        print(f"Debug: Fetched Orders for Client ID {selected_client_id}: {orders}")
 
         if orders:
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for order in orders:
                 markup.add(KeyboardButton(
-                    f"Buyurtma ID: {order[0]}, Miqdor: {order[3]}, Sana: {datetime.strptime(order[2], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')}"))
+                    f"Buyurtma ID: {order[0]}, Miqdor: {order[3]}, Sana: {parse_date_safe(order[2])}"))
             markup.add(KeyboardButton("Bosh menyu"))
             user_states[user_id] = 'selecting_order_for_deletion'
             bot.send_message(message.chat.id, "O'chirish uchun buyurtmani tanlang:", reply_markup=markup)
@@ -1040,6 +1052,26 @@ def handle_select_client_for_order_deletion(message):
 
     except Exception as e:
         bot.send_message(message.chat.id, f"Mijoz noto`g`ri tanlangan: {e}")
+
+def parse_date_safe(date_str):
+    try:
+        # Try parsing with date and time
+        return datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
+    except ValueError:
+        try:
+            # Fallback to date-only parsing
+            return datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m/%Y')
+        except ValueError:
+            return "Noma'lum sana"  # Fallback if both fail
+
+def fetch_orders_by_user_id(user_id):
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM orders WHERE user_id = ?", (user_id,))
+    orders = c.fetchall()
+    conn.close()
+    return orders
+
 
 
 def get_order_by_id(order_id):
