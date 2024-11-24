@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 
 import telebot
@@ -31,13 +30,13 @@ def create_db_tables():
     conn = create_db_connection()
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY AUTOINCREMENT , username TEXT, first_name TEXT, last_name TEXT, type TEXT, saved_name TEXT, debt INTEGER, telegram_id TEXT)''')
+                 (user_id INTEGER PRIMARY KEY AUTOINCREMENT , username TEXT, first_name TEXT, last_name TEXT, type TEXT, saved_name TEXT, debt INTEGER DEFAULT 0, telegram_id TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS products
                     (product_id INTEGER PRIMARY KEY, product_name TEXT, product_price INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS itemInOrder
-                    (order_id INTEGER, product_id INTEGER, quantity INTEGER, price INTEGER)''')
+                    (order_id INTEGER, product_id INTEGER, quantity INTEGER, price INTEGER, FOREIGN KEY(order_id) REFERENCES orders(order_id), FOREIGN KEY(product_id) REFERENCES products(product_id))''')
     c.execute('''CREATE TABLE IF NOT EXISTS orders
-                    (order_id INTEGER PRIMARY KEY, user_id TEXT, order_date TEXT, total_sum INTEGER, total_quantity INTEGER, total_debt INTEGER, before_order_debt INTEGER, is_confirmed INTEGER)''')
+                    (order_id INTEGER PRIMARY KEY, user_id INTEGER, order_date TEXT, total_sum INTEGER, total_quantity INTEGER, total_debt INTEGER DEFAULT 0, before_order_debt INTEGER, is_confirmed INTEGER DEFAULT 0)''')
     conn.commit()
 
 
@@ -74,50 +73,6 @@ def user_command_wrapper(func):
     return wrapper
 
 
-# Функция для загрузки данных из JSON-файла
-def load_data(filename):
-    try:
-        with open(filename, 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
-        return {}
-
-
-# Функция для сохранения данных в JSON-файл
-def save_data(filename, data):
-    with open(filename, 'w') as file:
-        json.dump(data, file, indent=4)
-
-
-def migrate_data():
-    # Each order should contain the following fields:
-    # - order_id
-    # - saved_name
-    # - debt
-    # - order_date
-    # - products (list of dictionaries with keys: product_name, product_price, product_quantity)
-    # - total_sum
-    # - total_quantity
-    # - total_debt
-    # - before_order_debt
-    # - is_confirmed
-    data = load_data('data.json')
-    for user_id, user_data in data.items():
-        if 'saved_name' not in user_data:
-            user_data['saved_name'] = ''
-        if 'debt' not in user_data:
-            user_data['debt'] = 0
-        if 'orders' not in user_data:
-            user_data['orders'] = []
-        if user_data['orders']:
-            for order in user_data['orders']:
-                if 'is_confirmed' not in order:
-                    order['is_confirmed'] = False
-                if 'before_order_debt' not in order:
-                    order['before_order_debt'] = 0
-    save_data('data.json', data)
-
-
 # Check if user is an admin
 def is_admin(user_id):
     conn = create_db_connection()
@@ -130,7 +85,11 @@ def is_admin(user_id):
 
 # Check if user is a client
 def is_client(user_id):
-    data = load_data('data.json')
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
+    conn.close()
     user_data = data.get(user_id, {})
     return user_data.get('type') == 'client'
 
@@ -163,7 +122,11 @@ def back_to_menu(message):
 
 
 def get_orders_number():
-    data = load_data('data.json')
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
+    conn.close()
     num = 0
     for user_id, user_data in data.items():
         if user_data.get('type') == 'client':
@@ -173,7 +136,11 @@ def get_orders_number():
 
 
 def get_max_order_id():
-    data = load_data('data.json')
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
+    conn.close()
     max_id = 0
     for user_id, user_data in data.items():
         if user_data.get('type') == 'client':
@@ -453,9 +420,12 @@ def create_user(telegram_id, username, first_name, last_name, user_type):
 # Функция, которая выполняется при команде /start
 @bot.message_handler(commands=['start'])
 def start(message):
-    data = load_data('data.json')
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
+    conn.close()
     create_db_tables()
-    migrate_data()
     user_id = str(message.from_user.id)
 
     if not user_exists(user_id):
@@ -520,40 +490,44 @@ def parse_order_input(message_text):
 
 
 # Function to add an order from parsed input
-def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt,
-              before_order_debt):
-    data = load_data('data.json')
-    user_data = data.get(user_id, None)
+def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_quantity, total_debt, before_order_debt):
+    conn = create_db_connection()
+    c = conn.cursor()
+    
+    # Fetch the user data
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user_data = c.fetchone()
+    conn.close()
 
+    # Ensure user_data is a tuple and process it accordingly
     if user_data:
-        orders = user_data.get('orders', [])
-        order_id = str(get_max_order_id() + 1)  # Generate a new order ID
-        print(order_id)
-        order = {
-            'order_id': order_id,
-            'saved_name': saved_name,
-            'debt': debt,
-            'order_date': order_date,
-            'products': products,
-            'total_sum': total_sum,
-            'total_quantity': total_quantity,
-            'total_debt': total_debt,
-            'is_confirmed': False,
-            'before_order_debt': before_order_debt
-        }
-        print(before_order_debt)
-        orders.append(order)
-        user_data['orders'] = orders
+        # Add the new order to the database
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO orders (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, 0)
+        )
+        order_id = c.lastrowid  # Get the ID of the newly inserted order
 
-        # Update the user's debt by adding the total_debt of the new order
-        # user_data['debt'] += debt
-        user_data['debt'] = debt
-        # Здесь нужно поменять и сделать user_data['debt'] += total_sum 
-        # Тогда к исходному долгу одного юзера будет прибовляться сумма заказа
+        # Insert each product into the itemInOrder table
+        for product in products:
+            product_id = get_product_id_by_name(product['product_name'])
+            c.execute(
+                "INSERT INTO itemInOrder (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)",
+                (order_id, product_id, product['product_quantity'], product['product_price'])
+            )
 
-        # Save updated user data
-        data[user_id] = user_data
-        save_data('data.json', data)
+        # Update the user's debt in the database
+        c.execute("UPDATE users SET debt=? WHERE user_id=?", (total_debt, user_id))
+        conn.commit()
+        conn.close()
+
+        print(f"Order added for user {user_id}: Order ID {order_id}")
+    else:
+        print(f"User {user_id} not found.")
+
 
 
 def print_orders(orders):
@@ -571,7 +545,11 @@ def print_orders(orders):
 
 # Function to list all orders for a user
 def list_orders(user_id):
-    data = load_data('data.json')
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
+    conn.close()
     user_data = data.get(user_id, None)
 
     if is_admin(user_id):
@@ -648,7 +626,11 @@ def list_orders_db_admin():
 
 
 def get_debt(user_id):
-    data = load_data('data.json')
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
+    conn.close()
     user_data = data.get(user_id, None)
     if user_data:
         return user_data.get('total_debt', 0)
@@ -657,8 +639,17 @@ def get_debt(user_id):
 
 # Function to list all products in a specific order
 def list_products(user_id, order_id):
-    data = load_data('data.json')
-    user_data = data.get(user_id, None)
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM orders")
+    orders = c.fetchall()
+    conn.close()
+    
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user_data = c.fetchone()
+    conn.close()
 
     if user_data:
         orders = user_data.get('orders', [])
@@ -865,6 +856,8 @@ def receive_product_quantity(message):
             bot.send_message(message.chat.id, user_cart_to_str(user_cart[selected_client_id]))
             print(user_cart)
             user_states[user_id] = 'awaiting_order_data'
+            markup = products_list_keyboard()  # Display the product selection menu again
+            bot.send_message(message.chat.id, "Iltimos, mahsulotni tanlang yoki menyudan birini tanlang:", reply_markup=markup)
         else:
             bot.send_message(message.chat.id, "Miqdor raqam bo'lishi kerak.")
     else:
@@ -914,20 +907,55 @@ def add_order_to_db(cart, total_sum, user_id):
 # Step 6: Handle the confirmation of the order
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'confirming_order')
 def handle_confirm_order(message):
-    print("confirming order")
     user_id = str(message.from_user.id)
     selected_user_id = admin_selected_clients.get(user_id)
+
     if message.text == "Ha":
         cart = user_cart[selected_user_id]
-        total_sum = confirm_cart(cart)[1]
-        add_order_to_db(cart, total_sum, selected_user_id)
+
+        # Convert cart to product list
+        products = []
+        for product_id, quantity in cart.items():
+            conn = create_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT product_name, product_price FROM products WHERE product_id=?", (product_id,))
+            product_data = c.fetchone()
+            conn.close()
+            if product_data:
+                product_name, product_price = product_data
+                products.append({
+                    'product_name': product_name,
+                    'product_price': product_price,
+                    'product_quantity': quantity
+                })
+
+        total_sum = sum(p['product_price'] * p['product_quantity'] for p in products)
+        total_quantity = sum(p['product_quantity'] for p in products)
+        before_order_debt = get_user_debt(selected_user_id)
+        total_debt = before_order_debt + total_sum
+
+        # Add order
+        add_order(
+            user_id=selected_user_id,
+            saved_name="",
+            debt=total_debt,
+            order_date=datetime.now().strftime("%Y-%m-%d"),
+            products=products,
+            total_sum=total_sum,
+            total_quantity=total_quantity,
+            total_debt=total_debt,
+            before_order_debt=before_order_debt
+        )
+
         bot.send_message(message.chat.id, "Buyurtma muvaffaqiyatli qo`shildi.")
         user_states[user_id] = None
         back_to_menu(message)
+
     elif message.text == "Yo'q":
         bot.send_message(message.chat.id, "Buyurtma bekor qilindi.")
         user_states[user_id] = None
         back_to_menu(message)
+
 
 
 # Example of using delete_order function
@@ -1068,7 +1096,7 @@ def handle_list_orders(message):
 
     if is_client(user_id):
         orders_list = list_orders_db(user_id)  # Clients can only list their own orders
-        debt = get_user_debt(user_id)
+        debt = get_user_debt(user_id) or 0
         combined_message = f"Qarz: {'{:,}'.format(debt)} сўм \n{orders_list}"
         bot.send_message(message.chat.id, combined_message)
 
@@ -1100,35 +1128,96 @@ def handle_list_products(message):
 
     order_id = command_parts[1]  # Extract order ID from the message
 
-    # Search for the order by ID across all users if the requester is an admin
     if is_admin(user_id):
-        data = load_data('data.json')
-        for client_id, client_data in data.items():
-            orders = client_data.get('orders', [])
+        conn = create_db_connection()
+        c = conn.cursor()
+
+        # Fetch all clients for admin
+        c.execute("SELECT user_id, first_name, last_name FROM users WHERE type='client'")
+        clients = c.fetchall()
+        conn.close()
+
+        # Iterate through clients and their orders
+        for client_id, first_name, last_name in clients:
+            conn = create_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT * FROM orders WHERE user_id=?", (client_id,))
+            orders = c.fetchall()
+            conn.close()
+
+            # Check if the order ID matches
             for order in orders:
-                if order['order_id'] == order_id:
-                    before_order_debt = order['before_order_debt']
-                    total_sum = order['debt']
-                    # Filter products with quantity greater than 0
-                    products = [product for product in order['products'] if product['product_quantity'] > 0]
-                    products_list = "\n".join([
-                        f"Mahsulot: {product['product_name']}, Narx: {product['product_price']}, "
-                        f"Miqdori: {product['product_quantity']}"
-                        for product in products
-                    ])
-                    if not products_list:
+                if str(order[0]) == order_id:  # Assuming order[0] is the order_id column
+                    before_order_debt = order[6]  # Assuming order[6] is the before_order_debt column
+                    total_sum = order[3]  # Assuming order[3] is the total_sum column
+
+                    # Fetch products associated with this order
+                    conn = create_db_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT * FROM itemInOrder WHERE order_id=?", (order_id,))
+                    products = c.fetchall()
+                    conn.close()
+
+                    # Prepare the product list
+                    if products:
+                        products_list = "\n".join([
+                            f"Mahsulot: {product[1]}, Narx: {product[3]}, Miqdori: {product[2]}"
+                            for product in products
+                        ])
+                    else:
                         products_list = "Mahsulotlar topilmadi."
-                    products_list = f"Savdodan avvalgi qarz: {before_order_debt} сўм\n\n" + products_list + f"\n\nJami summa: {total_sum} сўм"
+
+                    # Prepare and send the final message
+                    products_list = (
+                        f"Savdodan avvalgi qarz: {before_order_debt} сўм\n\n"
+                        + products_list
+                        + f"\n\nJami summa: {total_sum} сўм"
+                    )
                     bot.send_message(message.chat.id, products_list)
                     return
-        # If no order found
+
+        # If no matching order is found
         bot.send_message(message.chat.id, f"Buyurtma ID {order_id} topilmadi.")
+
     elif is_client(user_id):
         # Clients can only list their own products
-        products_list = list_products(user_id, order_id)
-        bot.send_message(message.chat.id, products_list)
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT * FROM orders WHERE user_id=? AND order_id=?", (user_id, order_id))
+        order = c.fetchone()
+
+        if order:
+            before_order_debt = order[6]  # Assuming order[6] is the before_order_debt column
+            total_sum = order[3]  # Assuming order[3] is the total_sum column
+
+            # Fetch products associated with this order
+            conn = create_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT * FROM itemInOrder WHERE order_id=?", (order_id,))
+            products = c.fetchall()
+            conn.close()
+
+            # Prepare the product list
+            if products:
+                products_list = "\n".join([
+                    f"Mahsulot: {product[1]}, Narx: {product[3]}, Miqdori: {product[2]}"
+                    for product in products
+                ])
+            else:
+                products_list = "Mahsulotlar topilmadi."
+
+            # Prepare and send the final message
+            products_list = (
+                f"Savdodan avvalgi qarz: {before_order_debt} сўм\n\n"
+                + products_list
+                + f"\n\nJami summa: {total_sum} сўм"
+            )
+            bot.send_message(message.chat.id, products_list)
+        else:
+            bot.send_message(message.chat.id, f"Buyurtma ID {order_id} topilmadi.")
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rishga ruxsat yo'q.")
+
 
 
 @bot.message_handler(func=lambda message: message.text == "/help")
