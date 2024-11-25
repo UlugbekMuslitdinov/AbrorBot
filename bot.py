@@ -373,7 +373,17 @@ def handle_edit_field(message):
             try:
                 new_value = int(new_value)
                 c.execute("UPDATE users SET debt=? WHERE user_id=?", (new_value, selected_client_id))
+                
                 bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value}.")
+                
+                # Retrieve the client's Telegram ID
+                c.execute("SELECT telegram_id FROM users WHERE user_id=?", (selected_client_id,))
+                client_telegram_id = c.fetchone()
+                
+                if client_telegram_id and client_telegram_id[0]:
+                    # Notify the client about the debt change
+                    bot.send_message(client_telegram_id[0], f"Sizning qarzingiz o'zgartirildi. Hozirgi qarzingiz: {new_value} so'm.")
+                
                 back_to_menu(message)
             except ValueError:
                 bot.send_message(message.chat.id, "Qarzni noto`g`ri kiritdingiz. Iltimos, qaytadan kiriting.")
@@ -719,9 +729,9 @@ def products_list_keyboard():
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     for product in products:
         markup.add(KeyboardButton(product[1]))
-    markup.add(KeyboardButton("Bosh menyu"))
     markup.add(KeyboardButton("Mahsulot qo'shish"))
     markup.add(KeyboardButton("Buyurtma yig'ildi"))
+    markup.add(KeyboardButton("Bosh menyu"))
     return markup
 
 
