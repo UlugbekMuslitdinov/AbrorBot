@@ -227,7 +227,7 @@ def handle_select_client_for_edit(message):
             f"Ism: {client_data[2]}\n"
             f"Familiya: {client_data[3]}\n"
             f"Sistemadagi Ism: {client_data[5]}\n"
-            f"Qarzi: {client_data[6]}\n"
+            f"Qarzi: {client_data[6]:,}\n"
             f"Type: {client_data[4]}\n"
         )
         bot.send_message(message.chat.id, client_info)
@@ -366,7 +366,7 @@ def handle_edit_field(message):
                 new_price = int(new_value)
                 c.execute("UPDATE products SET product_price=? WHERE product_id=?", (new_price, selected_product_id))
                 conn.commit()
-                bot.send_message(message.chat.id, f"Mahsulot narxi muvaffaqiyatli o'zgartirildi: {new_price}")
+                bot.send_message(message.chat.id, f"Mahsulot narxi muvaffaqiyatli o'zgartirildi: {new_price:,}")
             except ValueError:
                 bot.send_message(message.chat.id, "Narx noto'g'ri formatda. Iltimos, raqam kiriting.")
 
@@ -402,12 +402,12 @@ def handle_edit_field(message):
             try:
                 new_value = int(new_value)
                 c.execute("UPDATE users SET debt=? WHERE user_id=?", (new_value, selected_client_id))
-                bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value}.")
+                bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value:,}.")
                 # Notify client about debt change
                 c.execute("SELECT telegram_id FROM users WHERE user_id=?", (selected_client_id,))
                 client_telegram_id = c.fetchone()
                 if client_telegram_id and client_telegram_id[0]:
-                    bot.send_message(client_telegram_id[0], f"Sizning qarzingiz o'zgartirildi. Hozirgi qarzingiz: {new_value} so'm.")
+                    bot.send_message(client_telegram_id[0], f"Sizning qarzingiz o'zgartirildi. Hozirgi qarzingiz: {new_value:,} so'm.")
             except ValueError:
                 bot.send_message(message.chat.id, "Qarzni noto`g`ri kiritdingiz. Iltimos, qaytadan kiriting.")
         elif state == 'editing_type':
@@ -782,7 +782,7 @@ def handle_edit_product_menu(message):
     # Display products to the admin
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     for product in products:
-        product_text = f"{product[1]} - {product[2]} so'm (ID: {product[0]})"
+        product_text = f"{product[1]} - {product[2]:,} so'm (ID: {product[0]})"
         markup.add(KeyboardButton(product_text))
     markup.add(KeyboardButton("Bosh menyu"))
     
@@ -884,7 +884,7 @@ def handle_edit_product_price(message):
             conn.commit()
             conn.close()
 
-            bot.send_message(message.chat.id, f"Mahsulot narxi muvaffaqiyatli o'zgartirildi: {new_price}")
+            bot.send_message(message.chat.id, f"Mahsulot narxi muvaffaqiyatli o'zgartirildi: {new_price:,}")
             user_states[user_id] = None
             cur_product[user_id] = None
             back_to_menu(message)
@@ -1015,7 +1015,14 @@ def add_new_product(message):
         keyboard = products_list_keyboard()
         bot.send_message(message.chat.id, "Yangi mahsulot muvaffaqiyatli qo`shildi.", reply_markup=keyboard)
         user_states[user_id] = 'awaiting_order_data'
+    except ValueError:
+        # Handle specific unpacking errors
+        bot.send_message(
+            message.chat.id, 
+            "Mahsulotni qo`shishda xatolik yuz berdi: Yangi mahsulot nomini va narxini ko'rsatilgan tartibda kiriting. Masalan: Pomidor, 5000"
+        )
     except Exception as e:
+        # Handle other exceptions
         bot.send_message(message.chat.id, f"Mahsulotni qo`shishda xatolik yuz berdi: {e}")
         user_states[user_id] = None
 
@@ -1076,8 +1083,8 @@ def confirm_cart(cart):
         product_name = product[0]
         product_price = product[1]
         total_sum += product_price * quantity
-        message += f"{product_name}: {quantity} x {product_price} = {quantity * product_price}\n"
-    message += f"Jami summa: {total_sum}"
+        message += f"{product_name}: {quantity} x {product_price:,} = {(quantity * product_price):,}\n"
+    message += f"Jami summa: {total_sum:,}"
     return message, total_sum
 
 
@@ -1200,16 +1207,16 @@ def handle_delete_order(message):
     func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client_for_order_deletion')
 @user_command_wrapper
 def handle_select_client_for_order_deletion(message):
-    if message.text == "Bosh menyu":
-        back_to_menu(message)
-        return
-
-    if message.text in commands_list:
-        redirect_to_command(message)
-        return
-
     user_id = str(message.from_user.id)
     client_choice = message.text.strip()
+
+    if client_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+    
+    if client_choice in commands_list:
+        redirect_to_command(message)
+        return
 
     try:
         # Extract client ID from the selected text (the ID is in parentheses)
@@ -1225,7 +1232,7 @@ def handle_select_client_for_order_deletion(message):
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for order in orders:
                 markup.add(KeyboardButton(
-                    f"Buyurtma ID: {order[0]}, Miqdor: {order[3]}, Sana: {parse_date_safe(order[2])}"))
+                    f"Buyurtma ID: {order[0]}, Miqdor: {order[3]:,}, Sana: {parse_date_safe(order[2])}"))
             markup.add(KeyboardButton("Bosh menyu"))
             user_states[user_id] = 'selecting_order_for_deletion'
             bot.send_message(message.chat.id, "O'chirish uchun buyurtmani tanlang:", reply_markup=markup)
