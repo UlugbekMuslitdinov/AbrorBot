@@ -110,7 +110,8 @@ def back_to_menu(message):
     if is_admin(user_id):
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add(KeyboardButton("Buyurtma qo'shish"), KeyboardButton("Buyurtmani o'chirish"))
-        markup.add(KeyboardButton("Mijoz ma'lumotlarini o'zgartirish"), KeyboardButton("Buyurtmalarni ko'rish"))
+        markup.add(KeyboardButton("Mijoz ma'lumotlarini o'zgartirish"), KeyboardButton("Mahsulotni tahrirlash"))
+        markup.add(KeyboardButton("Buyurtmalarni ko'rish"))
         user_states[user_id] = None
         bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
         print("Back to menu")
@@ -335,7 +336,7 @@ def handle_confirm_client_deletion(message):
     str(message.from_user.id)).startswith('editing'))
 def handle_edit_field(message):
     user_id = str(message.from_user.id)
-    selected_client_id = admin_selected_clients.get(user_id)
+    state = user_states.get(user_id)
     new_value = message.text.strip()
 
     if new_value == "Bosh menyu":
@@ -346,68 +347,86 @@ def handle_edit_field(message):
         redirect_to_command(message)
         return
 
-    if selected_client_id:
-        client_data = get_client_by_id(selected_client_id)
+    if state.startswith('editing_product_'):
+        # Handle product editing
+        selected_product_id = cur_product.get(user_id)
+        if not selected_product_id:
+            bot.send_message(message.chat.id, "Mahsulot tanlanmadi. Iltimos, qayta urinib ko'ring.")
+            return
 
-        # Update the correct field based on the state
-        state = user_states[user_id]
         conn = create_db_connection()
         c = conn.cursor()
+
+        if state == 'editing_product_name':
+            c.execute("UPDATE products SET product_name=? WHERE product_id=?", (new_value, selected_product_id))
+            conn.commit()
+            bot.send_message(message.chat.id, f"Mahsulot nomi muvaffaqiyatli o'zgartirildi: {new_value}")
+        elif state == 'editing_product_price':
+            try:
+                new_price = int(new_value)
+                c.execute("UPDATE products SET product_price=? WHERE product_id=?", (new_price, selected_product_id))
+                conn.commit()
+                bot.send_message(message.chat.id, f"Mahsulot narxi muvaffaqiyatli o'zgartirildi: {new_price}")
+            except ValueError:
+                bot.send_message(message.chat.id, "Narx noto'g'ri formatda. Iltimos, raqam kiriting.")
+
+        conn.close()
+        # Reset state and product selection
+        user_states[user_id] = None
+        cur_product[user_id] = None
+        back_to_menu(message)
+
+    elif state.startswith('editing_'):
+        # Handle client-related editing
+        selected_client_id = admin_selected_clients.get(user_id)
+        if not selected_client_id:
+            bot.send_message(message.chat.id, "Mijoz tanlanmangan. Iltimos, qaytadan urinib ko`ring.")
+            return
+
+        conn = create_db_connection()
+        c = conn.cursor()
+
         if state == 'editing_username':
             c.execute("UPDATE users SET username=? WHERE user_id=?", (new_value, selected_client_id))
             bot.send_message(message.chat.id, f"Username o`zgartirildi '{new_value}'.")
-            back_to_menu(message)
         elif state == 'editing_ism':
             c.execute("UPDATE users SET first_name=? WHERE user_id=?", (new_value, selected_client_id))
             bot.send_message(message.chat.id, f"Ism o`zgartirildi '{new_value}'.")
-            back_to_menu(message)
         elif state == 'editing_familiya':
             c.execute("UPDATE users SET last_name=? WHERE user_id=?", (new_value, selected_client_id))
             bot.send_message(message.chat.id, f"Familiya o`zgartirildi '{new_value}'.")
-            back_to_menu(message)
         elif state == 'editing_sistemadagi_ism':
             c.execute("UPDATE users SET saved_name=? WHERE user_id=?", (new_value, selected_client_id))
             bot.send_message(message.chat.id, f"Sistemadagi ism o`zgartirildi '{new_value}'.")
-            back_to_menu(message)
         elif state == 'editing_qarzi':
             try:
                 new_value = int(new_value)
                 c.execute("UPDATE users SET debt=? WHERE user_id=?", (new_value, selected_client_id))
-                
                 bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value}.")
-                
-                # Retrieve the client's Telegram ID
+                # Notify client about debt change
                 c.execute("SELECT telegram_id FROM users WHERE user_id=?", (selected_client_id,))
                 client_telegram_id = c.fetchone()
-                
                 if client_telegram_id and client_telegram_id[0]:
-                    # Notify the client about the debt change
                     bot.send_message(client_telegram_id[0], f"Sizning qarzingiz o'zgartirildi. Hozirgi qarzingiz: {new_value} so'm.")
-                
-                back_to_menu(message)
             except ValueError:
                 bot.send_message(message.chat.id, "Qarzni noto`g`ri kiritdingiz. Iltimos, qaytadan kiriting.")
-                back_to_menu(message)
         elif state == 'editing_type':
             if new_value in ['Admin', 'Client']:
                 c.execute("UPDATE users SET type=? WHERE user_id=?", (new_value.lower(), selected_client_id))
                 bot.send_message(message.chat.id, f"User type o`zgartirildi '{new_value.lower()}'.")
-                back_to_menu(message)
             else:
                 bot.send_message(message.chat.id, "Typeni noto`g`ri kiritdingiz. Iltimos, qaytadan kiriting.")
-                back_to_menu(message)
 
-        # Save the updated data
         conn.commit()
         conn.close()
 
-
-        # Reset state
+        # Reset state and client selection
         user_states[user_id] = None
         admin_selected_clients[user_id] = None
+        back_to_menu(message)
 
     else:
-        bot.send_message(message.chat.id, "Mijoz tanlanmangan. Iltimos, qaytadan urinib ko`ring.")
+        bot.send_message(message.chat.id, "Amalni qayta aniqlab bo'lmadi. Iltimos, qayta urinib ko'ring.")
 
 
 def user_exists(telegram_id):
@@ -729,11 +748,166 @@ def products_list_keyboard():
     markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
     for product in products:
         markup.add(KeyboardButton(product[1]))
+
     markup.add(KeyboardButton("Mahsulot qo'shish"))
     markup.add(KeyboardButton("Buyurtma yig'ildi"))
     markup.add(KeyboardButton("Bosh menyu"))
     return markup
 
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------------------------------------------------------------------- 
+#--------------------------------------------------------------------------------------------------------------------------------------------
+
+@bot.message_handler(func=lambda message: message.text == "Mahsulotni tahrirlash")
+@user_command_wrapper
+def handle_edit_product_menu(message):
+    user_id = str(message.from_user.id)
+    
+    # Fetch products from the database
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT product_id, product_name, product_price FROM products")
+    products = c.fetchall()
+    conn.close()
+    
+    # Check if there are products to edit
+    if not products:
+        bot.send_message(message.chat.id, "Hech qanday mahsulot topilmadi.")
+        back_to_menu(message)
+        return
+
+    # Display products to the admin
+    markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+    for product in products:
+        product_text = f"{product[1]} - {product[2]} so'm (ID: {product[0]})"
+        markup.add(KeyboardButton(product_text))
+    markup.add(KeyboardButton("Bosh menyu"))
+    
+    user_states[user_id] = 'selecting_product'
+    bot.send_message(message.chat.id, "Tahrir uchun mahsulotni tanlang:", reply_markup=markup)
+
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_product')
+@user_command_wrapper
+def handle_product_selection(message):
+    user_id = str(message.from_user.id)
+    product_choice = message.text.strip()
+
+    if product_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    try:
+        # Extract product ID from the selected text
+        product_id = int(product_choice.split("(ID: ")[-1].strip(")"))
+        cur_product[user_id] = product_id
+
+        # Display options for editing or deleting
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add(KeyboardButton("Nomi o'zgartirish"), KeyboardButton("Narxi o'zgartirish"))
+        markup.add(KeyboardButton("Mahsulotni o'chirish"))
+        markup.add(KeyboardButton("Bosh menyu"))
+        user_states[user_id] = 'choosing_product_action'
+        bot.send_message(message.chat.id, "Qanday amalni bajarmoqchisiz?", reply_markup=markup)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Noto'g'ri mahsulot tanlandi: {e}")
+
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'choosing_product_action')
+@user_command_wrapper
+def handle_product_action(message):
+    user_id = str(message.from_user.id)
+    action_choice = message.text.strip()
+    selected_product_id = cur_product.get(user_id)
+
+    if action_choice == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if action_choice == "Nomi o'zgartirish":
+        user_states[user_id] = 'editing_product_name'
+        bot.send_message(message.chat.id, "Yangi nomni kiriting:")
+    elif action_choice == "Narxi o'zgartirish":
+        user_states[user_id] = 'editing_product_price'
+        bot.send_message(message.chat.id, "Yangi narxni kiriting:")
+    elif action_choice == "Mahsulotni o'chirish":
+        if selected_product_id:
+            delete_product(selected_product_id)
+            bot.send_message(message.chat.id, f"Mahsulot (ID: {selected_product_id}) muvaffaqiyatli o'chirildi.")
+            user_states[user_id] = None
+            cur_product[user_id] = None
+            back_to_menu(message)
+        else:
+            bot.send_message(message.chat.id, "Mahsulot tanlanmadi. Iltimos, qayta urinib ko'ring.")
+    else:
+        bot.send_message(message.chat.id, "Noto'g'ri tanlov. Iltimos, qayta urinib ko'ring.")
+
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'editing_product_name')
+@user_command_wrapper
+def handle_edit_product_name(message):
+    user_id = str(message.from_user.id)
+    new_name = message.text.strip()
+    selected_product_id = cur_product.get(user_id)  # Focus only on the product, not the client
+
+    if selected_product_id:
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE products SET product_name=? WHERE product_id=?", (new_name, selected_product_id))
+        conn.commit()
+        conn.close()
+
+        bot.send_message(message.chat.id, f"Mahsulot nomi muvaffaqiyatli o'zgartirildi: {new_name}")
+        user_states[user_id] = None
+        cur_product[user_id] = None
+        back_to_menu(message)
+    else:
+        bot.send_message(message.chat.id, "Mahsulot tanlanmadi. Iltimos, qayta urinib ko'ring.")
+
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'editing_product_price')
+@user_command_wrapper
+def handle_edit_product_price(message):
+    user_id = str(message.from_user.id)
+    new_price = message.text.strip()
+    selected_product_id = cur_product.get(user_id)
+
+    try:
+        new_price = int(new_price)
+        if selected_product_id:
+            conn = create_db_connection()
+            c = conn.cursor()
+            c.execute("UPDATE products SET product_price=? WHERE product_id=?", (new_price, selected_product_id))
+            conn.commit()
+            conn.close()
+
+            bot.send_message(message.chat.id, f"Mahsulot narxi muvaffaqiyatli o'zgartirildi: {new_price}")
+            user_states[user_id] = None
+            cur_product[user_id] = None
+            back_to_menu(message)
+        else:
+            bot.send_message(message.chat.id, "Mahsulot tanlanmadi. Iltimos, qayta urinib ko'ring.")
+    except ValueError:
+        bot.send_message(message.chat.id, "Narx noto'g'ri formatda. Iltimos, raqam kiriting.")
+
+
+def delete_product(product_id):
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM products WHERE product_id=?", (product_id,))
+    conn.commit()
+    conn.close()
+
+
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------------------------------------------------------------
 
 # Step 2: Handle the selection of a client or creating a new client
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client')
