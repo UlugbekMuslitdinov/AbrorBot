@@ -1,9 +1,7 @@
 from datetime import datetime
 
 import telebot
-from telebot import types
-from telebot.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from functools import wraps
+from telebot.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 import sqlite3
 
 TOKEN = '7099572080:AAH6FYY_KDVrCgvhVa8CgV2ZdTIESi0JZEw'
@@ -555,8 +553,10 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
         conn.close()
 
         print(f"Order added for user {user_id}: Order ID {order_id}")
+        return order_id
     else:
         print(f"User {user_id} not found.")
+        return None
 
 
 
@@ -655,7 +655,7 @@ def list_orders_db(telegram_id):
 def get_user_debt(user_id):
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute("SELECT debt FROM users WHERE telegram_id=?", (user_id,))
+    c.execute("SELECT debt FROM users WHERE user_id=?", (user_id,))
     debt = c.fetchone()
     conn.close()
     return debt[0] if debt else 0
@@ -1111,6 +1111,34 @@ def add_order_to_db(cart, total_sum, user_id):
     conn.close()
 
 
+def get_user_telegram_id(user_id):
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT telegram_id FROM users WHERE user_id=?", (user_id,))
+    telegram_id = c.fetchone()
+    conn.close()
+    return telegram_id[0] if telegram_id else None
+
+
+def order_receipt_str(order_id):
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM orders WHERE order_id=?", (order_id,))
+    order = c.fetchone()
+    c.execute("SELECT product_name, quantity, price FROM itemInOrder JOIN products ON itemInOrder.product_id = products.product_id WHERE order_id=?", (order_id,))
+    products = c.fetchall()
+    conn.close()
+    message = f"Buyurtma ID: {order[0]}\n"
+    message += f"Sana: {order[2]}\n\n"
+    message += "Mahsulotlar:\n"
+    for product in products:
+        message += f"{product[0]}: {product[1]} x {product[2]:,} = {(product[1] * product[2]):,}\n"
+    message += f"\nJami summa: {order[3]:,}\n"
+    message += f"Jami miqdor: {order[4]}\n"
+    message += f"Oldindan bor qarz: {order[6]:,}\n"
+    message += f"Jami qarz: {order[5]:,}\n"
+    return message
+
 # Step 6: Handle the confirmation of the order
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'confirming_order')
 def handle_confirm_order(message):
@@ -1139,10 +1167,11 @@ def handle_confirm_order(message):
         total_sum = sum(p['product_price'] * p['product_quantity'] for p in products)
         total_quantity = sum(p['product_quantity'] for p in products)
         before_order_debt = get_user_debt(selected_user_id)
+        print(before_order_debt, selected_user_id)
         total_debt = before_order_debt + total_sum
 
         # Add order
-        add_order(
+        new_order_id = add_order(
             user_id=selected_user_id,
             saved_name="",
             debt=total_debt,
@@ -1155,7 +1184,14 @@ def handle_confirm_order(message):
         )
 
         bot.send_message(message.chat.id, "Buyurtma muvaffaqiyatli qo`shildi.")
-        user_states[user_id] = None
+        client_telegram_id = get_user_telegram_id(selected_user_id)
+        if client_telegram_id:
+            order_receipt = order_receipt_str(new_order_id)
+            confirm_buttons = InlineKeyboardMarkup()
+            confirm_buttons.add(InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_order_{new_order_id}"))
+            bot.send_message(client_telegram_id, order_receipt, reply_markup=confirm_buttons)
+            user_states[client_telegram_id] = 'confirming_order'
+        user_states[user_id] = "awaiting_order_confirmation"
         back_to_menu(message)
 
     elif message.text == "Yo'q":
@@ -1163,6 +1199,21 @@ def handle_confirm_order(message):
         user_states[user_id] = None
         back_to_menu(message)
 
+
+# Step 7: Handle the confirmation of the order by the client
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_order_"))
+def handle_confirm_order_callback(call):
+    order_id = int(call.data.split("_")[-1])
+    order = get_order_by_id(order_id)
+    if order:
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE orders SET is_confirmed=1 WHERE order_id=?", (order_id,))
+        conn.commit()
+        conn.close()
+        bot.send_message(call.message.chat.id, "Buyurtma tasdiqlandi.")
+    else:
+        bot.send_message(call.message.chat.id, "Buyurtma topilmadi.")
 
 
 # Example of using delete_order function
@@ -1304,8 +1355,14 @@ def handle_select_order_for_deletion(message):
             if not new_orders:
                 bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} topilmadi.")
             else:
+                order = get_order_by_id(selected_order_id)
+                order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
+                telegram_id = get_user_telegram_id(user_id)
+                order_str = order_receipt_str(order_id)
                 delete_order_by_id(selected_order_id)
                 bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} muvaffaqiyatli o`chiirildi.")
+                if telegram_id:
+                    bot.send_message(telegram_id, f"Buyurtmangiz o'chirildi:\n{order_str}")
                 back_to_menu(message)
         else:
             bot.send_message(message.chat.id, "Mijoz tanlanmagan. Iltimos, qaytadan urinib ko`ring.")
@@ -1356,6 +1413,7 @@ def handle_list_orders(message):
                     f"Jami summa: {total_sum:,} so'm\n"
                     f"Miqdor: {total_quantity}\n"
                     f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
+                    f"Yangi qarz: {total_debt:,} so'm\n"
                     f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
                 )
                 message_text += formatted_order
@@ -1378,6 +1436,7 @@ def handle_list_orders(message):
                     f"Jami summa: {total_sum:,} so'm\n"
                     f"Miqdor: {total_quantity}\n"
                     f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
+                    f"Yangi qarz: {total_debt:,} so'm\n"
                     f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
                 )
                 message_text += formatted_order
