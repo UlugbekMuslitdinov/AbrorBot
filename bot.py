@@ -564,7 +564,7 @@ def print_orders(orders):
     message = ""
     for order in orders:
         formatted_total_sum = "{:,}".format(order['total_sum']).replace(",", " ")
-        message += f"Buyurtma ID: {order['order_id']}, miqdor: {formatted_total_sum}, sana: {order['order_date']} "
+        message += f"Buyurtma ID: {order['order_id']}, miqdor: {formatted_total_sum:,}, sana: {order['order_date']} "
         if order['is_confirmed']:
             message += "Tasdiqlangan\n"
         else:
@@ -617,7 +617,7 @@ def list_orders(user_id):
             message = ""
             for order in orders:
                 formatted_total_sum = "{:,}".format(order['total_sum']).replace(",", " ")
-                message += (f"Buyurtma ID: {order['order_id']}, Miqdor: {formatted_total_sum} so'm, "
+                message += (f"Buyurtma ID: {order['order_id']}, Miqdor: {formatted_total_sum:,} so'm, "
                             f"Sana: {order['order_date']}\n")
 
                 # Call list_products to include products for each order
@@ -705,7 +705,7 @@ def list_products(user_id, order_id):
                 if products:
                     return "\n".join([
                         f"Mahsulot: {product['product_name']}, Narx: {'{:,}'.format(product['product_price']).replace(',', ' ')}, "
-                        f"Miqdori: {product['product_quantity']}"
+                        f"Miqdori: {product['product_quantity']:,}"
                         for product in products
                     ])
                 else:
@@ -1134,7 +1134,7 @@ def order_receipt_str(order_id):
     for product in products:
         message += f"{product[0]}: {product[1]} x {product[2]:,} = {(product[1] * product[2]):,}\n"
     message += f"\nJami summa: {order[3]:,}\n"
-    message += f"Jami miqdor: {order[4]}\n"
+    message += f"Jami miqdor: {order[4]:,}\n"
     message += f"Oldindan bor qarz: {order[6]:,}\n"
     message += f"Jami qarz: {order[5]:,}\n"
     return message
@@ -1183,7 +1183,9 @@ def handle_confirm_order(message):
             before_order_debt=before_order_debt
         )
 
-        bot.send_message(message.chat.id, "Buyurtma muvaffaqiyatli qo`shildi.")
+        # Notify admin about pending confirmation
+        bot.send_message(message.chat.id, "Buyurtma muvaffaqiyatli qo`shildi. Tasdiqlash uchun mijozga yuborildi.")
+
         client_telegram_id = get_user_telegram_id(selected_user_id)
         if client_telegram_id:
             order_receipt = order_receipt_str(new_order_id)
@@ -1211,7 +1213,24 @@ def handle_confirm_order_callback(call):
         c.execute("UPDATE orders SET is_confirmed=1 WHERE order_id=?", (order_id,))
         conn.commit()
         conn.close()
-        bot.send_message(call.message.chat.id, "Buyurtma tasdiqlandi.")
+
+        # Notify the client
+        bot.send_message(call.message.chat.id, "Buyurtma tasdiqlandi. Rahmat!")
+
+        # Notify the admin
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT telegram_id FROM users WHERE type='admin'")  # Assuming admins have type='admin'
+        admins = c.fetchall()
+        conn.close()
+
+        if admins:
+            order_summary = order_receipt_str(order_id)
+            for admin in admins:
+                admin_telegram_id = admin[0]
+                bot.send_message(admin_telegram_id, f"Buyurtma tasdiqlandi:\n{order_summary}")
+        else:
+            print("Admin Telegram IDs not found")
     else:
         bot.send_message(call.message.chat.id, "Buyurtma topilmadi.")
 
@@ -1411,7 +1430,7 @@ def handle_list_orders(message):
                     f"Buyurtma ID: {order_id}\n"
                     f"Sana: {order_date}\n"
                     f"Jami summa: {total_sum:,} so'm\n"
-                    f"Miqdor: {total_quantity}\n"
+                    f"Miqdor: {total_quantity:,}\n"
                     f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
                     f"Yangi qarz: {total_debt:,} so'm\n"
                     f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
@@ -1434,7 +1453,7 @@ def handle_list_orders(message):
                     f"Buyurtma ID: {order_id}\n"
                     f"Sana: {order_date}\n"
                     f"Jami summa: {total_sum:,} so'm\n"
-                    f"Miqdor: {total_quantity}\n"
+                    f"Miqdor: {total_quantity:,}\n"
                     f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
                     f"Yangi qarz: {total_debt:,} so'm\n"
                     f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
@@ -1501,7 +1520,7 @@ def handle_list_products(message):
                     # Prepare the product list
                     if products:
                         products_list = "\n".join([
-                            f"Mahsulot: {product[0]}, Miqdori: {product[1]}, Narxi: {product[2]}"
+                            f"Mahsulot: {product[0]}, Miqdori: {product[1]:,}, Narxi: {product[2]:,}"
                             for product in products
                         ])
                     else:
@@ -1546,7 +1565,7 @@ def handle_list_products(message):
             # Prepare the product list
             if products:
                 products_list = "\n".join([
-                    f"Mahsulot: {product[0]}, Miqdori: {product[1]}, Narxi: {product[2]}"
+                    f"Mahsulot: {product[0]}, Miqdori: {product[1]:,}, Narxi: {product[2]:,}"
                     for product in products
                 ])
             else:
