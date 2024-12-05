@@ -1425,50 +1425,81 @@ def handle_list_orders(message):
 
     # Check if the user is a client
     if is_client(user_id):
-        # Retrieve the client's orders from the database
-        orders_list = list_orders_db(user_id)
+        orders_list = list_orders_db(message.from_user.id)
         if orders_list:
-            message_text = f"Sizning buyurtmalaringiz:\n\n"
+            message_text = "Sizning buyurtmalaringiz:\n\n"
             for order in orders_list:
                 order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
-                formatted_order = (
+                order_date = parse_date_safe(order_date)
+
+                # Fetch products for the order
+                conn = create_db_connection()
+                c = conn.cursor()
+                c.execute("""
+                    SELECT p.product_name, io.quantity 
+                    FROM itemInOrder io 
+                    INNER JOIN products p ON io.product_id = p.product_id 
+                    WHERE io.order_id = ?
+                """, (order_id,))
+                products = c.fetchall()
+                conn.close()
+
+                # Format product list
+                product_details = "\n".join([f"{product[0]} ({product[1]})" for product in products])
+
+                # Append order details to message
+                message_text += (
                     f"Buyurtma ID: {order_id}\n"
                     f"Sana: {order_date}\n"
-                    f"Jami summa: {total_sum:,} so'm\n"
-                    f"Miqdor: {total_quantity:,}\n"
-                    f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
-                    f"Yangi qarz: {total_debt:,} so'm\n"
-                    f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
+                    f"Mahsulotlar:\n{product_details}\n"
+                    f"\nBuyurtmadan oldingi qarz: {before_order_debt:,} so'm\n"
+                    f"Jami buyurtma summasi: {total_sum:,} so'm\n"
+                    f"Hozirgi qarz: {total_debt:,} so'm\n"
+                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yo`q'}\n\n\n"
                 )
-                message_text += formatted_order
             bot.send_message(message.chat.id, message_text)
         else:
             bot.send_message(message.chat.id, "Sizning buyurtmalaringiz topilmadi.")
 
     elif is_admin(user_id):
-        # Admins can list all orders
         orders_list = list_orders_db_admin()
         if orders_list:
             message_text = "Barcha buyurtmalar:\n\n"
             for order in orders_list:
                 order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
+                order_date = parse_date_safe(order_date)
+
+                # Fetch products for the order
+                conn = create_db_connection()
+                c = conn.cursor()
+                c.execute("""
+                    SELECT p.product_name, io.quantity 
+                    FROM itemInOrder io 
+                    INNER JOIN products p ON io.product_id = p.product_id 
+                    WHERE io.order_id = ?
+                """, (order_id,))
+                products = c.fetchall()
+                conn.close()
+
+                # Format product list
+                product_details = "\n".join([f"{product[0]} ({product[1]})" for product in products])
                 full_name = get_client_full_name(user_id)
-                formatted_order = (
+
+                # Append order details to message
+                message_text += (
                     f"Mijoz: {full_name or 'Noma`lum'}\n"
                     f"Buyurtma ID: {order_id}\n"
                     f"Sana: {order_date}\n"
-                    f"Jami summa: {total_sum:,} so'm\n"
-                    f"Miqdor: {total_quantity:,}\n"
-                    f"Qarzdan oldingi holat: {before_order_debt:,} so'm\n"
-                    f"Yangi qarz: {total_debt:,} so'm\n"
-                    f"Tasdiq: {'Ha' if is_confirmed else 'Yo`q'}\n\n"
+                    f"Mahsulotlar:\n{product_details}\n"
+                    f"\nBuyurtmadan oldingi qarz: {before_order_debt:,} so'm\n"
+                    f"Jami buyurtma summasi: {total_sum:,} so'm\n"
+                    f"Hozirgi qarz: {total_debt:,} so'm\n"
+                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yo`q'}\n\n\n"
                 )
-                message_text += formatted_order
             bot.send_message(message.chat.id, message_text)
         else:
             bot.send_message(message.chat.id, "Buyurtmalar topilmadi.")
     else:
-        # If the user is neither a client nor an admin
         bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rish uchun ruxsat yo'q.")
 
     back_to_menu(message)
