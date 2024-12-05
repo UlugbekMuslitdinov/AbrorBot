@@ -1217,6 +1217,11 @@ def handle_confirm_order_callback(call):
         # Notify the client
         bot.send_message(call.message.chat.id, "Buyurtma tasdiqlandi. Rahmat!")
 
+        # Reset client state
+        user_id = str(call.from_user.id)
+        if user_id in user_states:
+            user_states[user_id] = None
+
         # Notify the admin
         conn = create_db_connection()
         c = conn.cursor()
