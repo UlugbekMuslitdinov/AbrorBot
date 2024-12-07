@@ -215,18 +215,27 @@ def handle_select_client_for_edit(message):
     # Extract client ID from the selected text (the ID is in parentheses)
     try:
         selected_client_id = client_choice.split('(')[-1].strip(')')
+        print(f"Selected client ID: {selected_client_id}")
         admin_selected_clients[user_id] = selected_client_id
+        print(f"Admin selected clients: {admin_selected_clients}")
 
         # Display the current client data
         client_data = get_client_by_id(selected_client_id)
+        print(f"Client data: {client_data}")
+        username = client_data[1] if client_data[1] else "None"
+        first_name = client_data[2] if client_data[2] else "None"
+        last_name = client_data[3] if client_data[3] else "None"
+        saved_name = client_data[5] if client_data[5] else "None"
+        debt = client_data[6] if client_data[6] else 0
+        user_type = client_data[4] if client_data[4] else "None"
         client_info = (
             f"Mijoz haqida:\n"
-            f"Username: {client_data[1]}\n"
-            f"Ism: {client_data[2]}\n"
-            f"Familiya: {client_data[3]}\n"
-            f"Sistemadagi Ism: {client_data[5]}\n"
-            f"Qarzi: {client_data[6]:,}\n"
-            f"Type: {client_data[4]}\n"
+            f"Username: {username}\n"
+            f"Ism: {first_name}\n"
+            f"Familiya: {last_name}\n"
+            f"Sistemadagi Ism: {saved_name}\n"
+            f"Qarzi: {debt:,} so'm\n"
+            f"Type: {user_type.capitalize()}"
         )
         bot.send_message(message.chat.id, client_info)
 
