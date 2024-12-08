@@ -531,41 +531,36 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
     conn = create_db_connection()
     c = conn.cursor()
     
-    # Fetch the user data
-    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    user_data = c.fetchone()
+    # Add the new order to the database
+    c.execute(
+        "INSERT INTO orders (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, 0)
+    )
+    order_id = c.lastrowid  # Get the ID of the newly inserted order
+
+    # Add each product to the itemInOrder table
+    for product in products:
+        product_id = get_product_id_by_name(product['product_name'])
+        c.execute(
+            "SELECT product_name, product_price FROM products WHERE product_id = ?", (product_id,)
+        )
+        product_data = c.fetchone()
+        if product_data:
+            product_name, product_price = product_data
+            c.execute(
+                "INSERT INTO itemInOrder (order_id, product_id, product_name, product_price, quantity, price) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (order_id, product_id, product_name, product_price, product['product_quantity'], product['product_price'])
+            )
+    
+    # Update the user's debt in the database
+    c.execute("UPDATE users SET debt = ? WHERE user_id = ?", (total_debt, user_id))
+    conn.commit()
     conn.close()
 
-    # Ensure user_data is a tuple and process it accordingly
-    if user_data:
-        # Add the new order to the database
-        conn = create_db_connection()
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO orders (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, 0)
-        )
-        order_id = c.lastrowid  # Get the ID of the newly inserted order
-
-        # Insert each product into the itemInOrder table
-        for product in products:
-            product_id = get_product_id_by_name(product['product_name'])
-            c.execute(
-                "INSERT INTO itemInOrder (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)",
-                (order_id, product_id, product['product_quantity'], product['product_price'])
-            )
-
-        # Update the user's debt in the database
-        c.execute("UPDATE users SET debt=? WHERE user_id=?", (total_debt, user_id))
-        conn.commit()
-        conn.close()
-
-        print(f"Order added for user {user_id}: Order ID {order_id}")
-        return order_id
-    else:
-        print(f"User {user_id} not found.")
-        return None
+    print(f"Order added for user {user_id}: Order ID {order_id}")
+    return order_id
 
 
 
@@ -1132,11 +1127,21 @@ def get_user_telegram_id(user_id):
 def order_receipt_str(order_id):
     conn = create_db_connection()
     c = conn.cursor()
+    
+    # Fetch the order details
     c.execute("SELECT * FROM orders WHERE order_id=?", (order_id,))
     order = c.fetchone()
-    c.execute("SELECT product_name, quantity, price FROM itemInOrder JOIN products ON itemInOrder.product_id = products.product_id WHERE order_id=?", (order_id,))
+
+    # Fetch the product details from itemInOrder (use itemInOrder.product_name to avoid ambiguity)
+    c.execute("""
+        SELECT itemInOrder.product_name, itemInOrder.quantity, itemInOrder.price 
+        FROM itemInOrder
+        WHERE itemInOrder.order_id=?
+    """, (order_id,))
     products = c.fetchall()
     conn.close()
+
+    # Format the receipt
     message = f"Buyurtma ID: {order[0]}\n"
     message += f"Sana: {order[2]}\n\n"
     message += "Mahsulotlar:\n"
@@ -1147,6 +1152,7 @@ def order_receipt_str(order_id):
     message += f"Oldindan bor qarz: {order[6]:,}\n"
     message += f"Jami qarz: {order[5]:,}\n"
     return message
+
 
 # Step 6: Handle the confirmation of the order
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'confirming_order')
@@ -1352,7 +1358,13 @@ def fetch_orders_by_user_id(user_id):
 def get_order_by_id(order_id):
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM orders WHERE order_id=?", (order_id,))
+    c.execute("""
+        SELECT orders.order_id, orders.user_id, orders.order_date, 
+               orders.total_sum, orders.total_quantity, 
+               orders.total_debt, orders.before_order_debt, orders.is_confirmed
+        FROM orders 
+        WHERE orders.order_id=?
+    """, (order_id,))
     order = c.fetchone()
     conn.close()
     return order
@@ -1361,12 +1373,22 @@ def get_order_by_id(order_id):
 def delete_order_by_id(order_id):
     conn = create_db_connection()
     c = conn.cursor()
-    user_id, order_total_sum = c.execute("SELECT user_id, total_sum FROM orders WHERE order_id=?", (order_id,)).fetchone()
+
+    # Fetch user_id and order_total_sum for updating user's debt
+    c.execute("SELECT user_id, total_sum FROM orders WHERE order_id=?", (order_id,))
+    user_id, order_total_sum = c.fetchone()
+
+    # Delete items in the order
     c.execute("DELETE FROM itemInOrder WHERE order_id=?", (order_id,))
+
+    # Delete the order itself
     c.execute("DELETE FROM orders WHERE order_id=?", (order_id,))
+
+    # Update the user's debt
     c.execute("UPDATE users SET debt=debt-? WHERE user_id=?", (order_total_sum, user_id))
     conn.commit()
     conn.close()
+
 
 # Handle the selection of an order to delete
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
@@ -1445,16 +1467,18 @@ def handle_list_orders(message):
                 conn = create_db_connection()
                 c = conn.cursor()
                 c.execute("""
-                    SELECT p.product_name, io.quantity 
-                    FROM itemInOrder io 
-                    INNER JOIN products p ON io.product_id = p.product_id 
-                    WHERE io.order_id = ?
+                    SELECT product_name, quantity, product_price 
+                    FROM itemInOrder 
+                    WHERE order_id = ?
                 """, (order_id,))
                 products = c.fetchall()
                 conn.close()
 
                 # Format product list
-                product_details = "\n".join([f"{product[0]} ({product[1]})" for product in products])
+                product_details = "\n".join([
+                    f"{product[0]} ({product[1]} x {product[2]:,})"
+                    for product in products
+                ])
 
                 # Append order details to message
                 message_text += (
@@ -1482,16 +1506,18 @@ def handle_list_orders(message):
                 conn = create_db_connection()
                 c = conn.cursor()
                 c.execute("""
-                    SELECT p.product_name, io.quantity 
-                    FROM itemInOrder io 
-                    INNER JOIN products p ON io.product_id = p.product_id 
-                    WHERE io.order_id = ?
+                    SELECT product_name, quantity, product_price 
+                    FROM itemInOrder 
+                    WHERE order_id = ?
                 """, (order_id,))
                 products = c.fetchall()
                 conn.close()
 
                 # Format product list
-                product_details = "\n".join([f"{product[0]} ({product[1]})" for product in products])
+                product_details = "\n".join([
+                    f"{product[0]} ({product[1]} x {product[2]:,})"
+                    for product in products
+                ])
                 full_name = get_client_full_name(user_id)
 
                 # Append order details to message
