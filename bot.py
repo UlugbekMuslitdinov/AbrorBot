@@ -115,7 +115,8 @@ def back_to_menu(message):
         print("Back to menu")
     else:
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add(KeyboardButton("Buyurtmalarni ko'rish"))
+        markup.add(KeyboardButton("Buyurtmalarni ko'rish"))  # View orders
+        markup.add(KeyboardButton("To'lovni amalga oshirish"))  # New payment button
         user_states[user_id] = None
         bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
         print("Back to menu")
@@ -151,6 +152,28 @@ def get_max_order_id():
                     max_id = order_id
     print("Max order ID:", max_id)
     return max_id
+
+
+
+def create_payments_table():
+    """
+    Create the 'payments' table in the database if it doesn't exist.
+    """
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            is_confirmed INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
 
 
 # Admin selects a client to edit
@@ -463,6 +486,7 @@ def start(message):
     data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
     conn.close()
     create_db_tables()
+    create_payments_table()  # Add this line to create the 'payments' table
     user_id = str(message.from_user.id)
 
     if not user_exists(user_id):
@@ -1653,6 +1677,162 @@ def handle_list_products(message):
             bot.send_message(message.chat.id, f"Buyurtma ID {order_id} topilmadi.")
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rishga ruxsat yo'q.")
+
+
+
+
+
+@bot.message_handler(func=lambda message: message.text == "To'lovni amalga oshirish")
+def handle_payment_button(message):
+    handle_pay_debt(message)  # Reuse the /pay_debt logic
+
+
+def list_admins():
+    """
+    Retrieve the Telegram IDs of all admins from the database.
+    """
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT telegram_id FROM users WHERE type='admin'")
+    admins = [row[0] for row in c.fetchall()]
+    conn.close()
+    return admins
+
+
+# Add a table for payments
+def create_payments_table():
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS payments
+                 (payment_id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER, is_confirmed INTEGER DEFAULT 0,
+                  FOREIGN KEY(user_id) REFERENCES users(user_id))''')
+    conn.commit()
+    conn.close()
+
+# Handle the /pay_debt command
+@bot.message_handler(commands=['pay_debt'])
+def handle_pay_debt(message):
+    user_id = str(message.from_user.id)
+    if is_client(user_id):
+        bot.send_message(message.chat.id, "To'lagan summangizni kiriting:")
+        user_states[user_id] = 'awaiting_payment_amount'
+    else:
+        bot.send_message(message.chat.id, "Siz mijoz emassiz. Ushbu buyruq faqat mijozlar uchun mavjud.")
+
+# Receive payment amount
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'awaiting_payment_amount')
+def receive_payment_amount(message):
+    user_id = str(message.from_user.id)
+    try:
+        amount = int(message.text.strip())
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO payments (user_id, amount) VALUES (?, ?)", (user_id, amount))
+        conn.commit()
+        payment_id = c.lastrowid
+        conn.close()
+
+        # Notify admins
+        admins = list_admins()  # This now retrieves the admin Telegram IDs
+        for admin in admins:
+            confirm_buttons = InlineKeyboardMarkup()
+            confirm_buttons.add(
+                InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_payment_{payment_id}"),
+                InlineKeyboardButton("Rad etish", callback_data=f"reject_payment_{payment_id}")
+            )
+            bot.send_message(admin, f"Mijoz {message.from_user.first_name} {message.from_user.last_name} "
+                                    f"{amount:,} so'm to'lov qildi.", reply_markup=confirm_buttons)
+
+
+        bot.send_message(message.chat.id, "To'lovingiz tasdiq uchun yuborildi.")
+        user_states[user_id] = None
+    except ValueError:
+        bot.send_message(message.chat.id, "To'lov summasi noto'g'ri. Iltimos, qaytadan kiriting.")
+
+    back_to_menu(message)
+
+# Handle admin confirmation or rejection
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_payment_") or call.data.startswith("reject_payment_"))
+def handle_payment_confirmation(call):
+    payment_id = int(call.data.split("_")[-1])
+    conn = create_db_connection()
+    c = conn.cursor()
+    
+    # Get user_id and amount from the payments table
+    c.execute("SELECT user_id, amount FROM payments WHERE payment_id=?", (payment_id,))
+    payment = c.fetchone()
+
+    if payment:
+        telegram_id, amount = payment
+
+        # Fetch internal user_id using telegram_id
+        c.execute("SELECT user_id FROM users WHERE telegram_id=?", (telegram_id,))
+        user_row = c.fetchone()
+        if not user_row:
+            print(f"Error: No user found with telegram_id={telegram_id}")
+            bot.send_message(call.message.chat.id, "Xatolik: Foydalanuvchi topilmadi.")
+            return
+
+        internal_user_id = user_row[0]
+
+        if call.data.startswith("confirm_payment_"):
+            # Debug: Before updating the debt
+            print(f"Debug: Attempting to fetch debt for user_id={internal_user_id}")
+            c.execute("SELECT debt FROM users WHERE user_id=?", (internal_user_id,))
+            current_debt = c.fetchone()
+            print(f"Debug: Query result for user_id={internal_user_id}: {current_debt}")
+
+            if current_debt is None:
+                print(f"Error: No user found with user_id={internal_user_id}")
+                bot.send_message(call.message.chat.id, "Xatolik: Foydalanuvchi topilmadi.")
+                return
+
+            current_debt = current_debt[0]
+            print(f"User {internal_user_id} current debt before payment: {current_debt}")
+
+            # Confirm payment and reduce debt
+            c.execute("UPDATE payments SET is_confirmed=1 WHERE payment_id=?", (payment_id,))
+            c.execute("UPDATE users SET debt=debt-? WHERE user_id=?", (amount, internal_user_id))
+            
+            # Also update 'total_debt' in the orders table
+            c.execute("""
+                UPDATE orders
+                SET total_debt = (
+                    SELECT debt FROM users WHERE user_id=?
+                )
+                WHERE user_id=? AND is_confirmed=1
+            """, (internal_user_id, internal_user_id))
+            
+            conn.commit()
+
+            # Debug: After updating the debt
+            c.execute("SELECT debt FROM users WHERE user_id=?", (internal_user_id,))
+            updated_debt = c.fetchone()
+            if updated_debt:
+                updated_debt = updated_debt[0]
+                print(f"User {internal_user_id} debt after payment: {updated_debt}")
+            else:
+                print(f"Error: Failed to fetch updated debt for user_id={internal_user_id}")
+
+            conn.close()
+
+            bot.send_message(call.message.chat.id, "To'lov tasdiqlandi.")
+            client_telegram_id = get_user_telegram_id(internal_user_id)
+            if client_telegram_id:
+                bot.send_message(client_telegram_id, f"Sizning {amount:,} so'm to'lovingiz tasdiqlandi. Rahmat!")
+        elif call.data.startswith("reject_payment_"):
+            # Reject payment
+            c.execute("DELETE FROM payments WHERE payment_id=?", (payment_id,))
+            conn.commit()
+            conn.close()
+
+            bot.send_message(call.message.chat.id, "To'lov rad etildi.")
+            client_telegram_id = get_user_telegram_id(internal_user_id)
+            if client_telegram_id:
+                bot.send_message(client_telegram_id, f"Sizning {amount:,} so'm to'lovingiz rad etildi.")
+    else:
+        bot.send_message(call.message.chat.id, "To'lov topilmadi.")
+
 
 
 
