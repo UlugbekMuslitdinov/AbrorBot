@@ -1325,38 +1325,89 @@ def handle_select_client_for_order_deletion(message):
     client_choice = message.text.strip()
 
     if client_choice == "Bosh menyu":
+        # Go to the main menu from the client list
+        print(f"Debug: User {user_id} selected 'Bosh menyu' - returning to main menu")
+        user_states[user_id] = None
         back_to_menu(message)
         return
-    
+
     if client_choice in commands_list:
         redirect_to_command(message)
         return
 
     try:
+        # Ensure the client choice contains a valid client ID
+        if "(" not in client_choice or ")" not in client_choice:
+            bot.send_message(message.chat.id, "Mijoz tanlash noto'g'ri. Qayta urinib ko'ring.")
+            return
+
         # Extract client ID from the selected text (the ID is in parentheses)
         selected_client_id = client_choice.split('(')[-1].strip(')')
         print(f"Debug: Extracted Selected Client ID: {selected_client_id}")
         admin_selected_clients[user_id] = selected_client_id
 
         # Fetch orders by user_id (client ID in this case)
-        orders = fetch_orders_by_user_id(selected_client_id)  # New function to fetch orders directly by user_id
+        orders = fetch_orders_by_user_id(selected_client_id)
         print(f"Debug: Fetched Orders for Client ID {selected_client_id}: {orders}")
 
         if orders:
+            # Create a ReplyKeyboardMarkup for the orders
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for order in orders:
-                markup.add(KeyboardButton(
-                    f"Buyurtma ID: {order[0]}, Miqdor: {order[3]:,}, Sana: {parse_date_safe(order[2])}"))
+                try:
+                    order_id = order[0]
+                    order_date = parse_date_safe(order[2])
+                    order_total = order[3]
+                    markup.add(KeyboardButton(f"Buyurtma ID: {order_id}, Miqdor: {order_total:,}, Sana: {order_date}"))
+                except Exception as e:
+                    print(f"Error processing order {order}: {e}")
+
+            # Add the "Bosh menyu" button
             markup.add(KeyboardButton("Bosh menyu"))
+
+            # Update user state and send the menu
             user_states[user_id] = 'selecting_order_for_deletion'
             bot.send_message(message.chat.id, "O'chirish uchun buyurtmani tanlang:", reply_markup=markup)
         else:
+            # No orders found, provide a fallback menu
+            print(f"Debug: No orders found for Client ID {selected_client_id}")
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(KeyboardButton("Bosh menyu"))
             bot.send_message(message.chat.id, "Mijozda buyurtmalar topilmadi.", reply_markup=markup)
 
     except Exception as e:
-        bot.send_message(message.chat.id, f"Mijoz noto`g`ri tanlangan: {e}")
+        print(f"Error while selecting client for order deletion: {e}")
+        bot.send_message(message.chat.id, f"Mijoz noto'g'ri tanlangan: {e}")
+
+
+def show_clients_list(message):
+    """
+    Show the list of clients to the admin for selection.
+    """
+    user_id = str(message.from_user.id)
+
+    try:
+        # Fetch the list of clients
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT user_id, first_name, last_name FROM users WHERE type='client'")
+        clients = c.fetchall()
+        conn.close()
+
+        if clients:
+            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            for client in clients:
+                client_id, first_name, last_name = client
+                markup.add(KeyboardButton(f"{first_name} {last_name} ({client_id})"))
+            markup.add(KeyboardButton("Bosh menyu"))
+            user_states[user_id] = 'selecting_client_for_order_deletion'
+            bot.send_message(message.chat.id, "Mijozni tanlang:", reply_markup=markup)
+        else:
+            bot.send_message(message.chat.id, "Mijozlar topilmadi.")
+    except Exception as e:
+        print(f"Error fetching clients: {e}")
+        bot.send_message(message.chat.id, f"Mijozlar ro'yxatini yuklashda xatolik: {e}")
+
 
 def parse_date_safe(date_str):
     try:
@@ -1414,43 +1465,43 @@ def delete_order_by_id(order_id):
     conn.close()
 
 
-# Handle the selection of an order to delete
-@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
+# Handle the selection of an order for deletion
+@bot.message_handler(
+    func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
 @user_command_wrapper
 def handle_select_order_for_deletion(message):
     user_id = str(message.from_user.id)
     order_choice = message.text.strip()
 
+    if order_choice == "Bosh menyu":
+        # Go back to the client list from the order list
+        print(f"Debug: User {user_id} selected 'Bosh menyu' - returning to client list")
+        user_states[user_id] = 'selecting_client_for_order_deletion'
+        show_clients_list(message)  # Function to show the list of clients
+        return
+
+    if order_choice in commands_list:
+        redirect_to_command(message)
+        return
+
     try:
+        # Ensure the order choice contains a valid order ID
+        if "Buyurtma ID:" not in order_choice:
+            bot.send_message(message.chat.id, "Buyurtma tanlash noto'g'ri. Qayta urinib ko'ring.")
+            return
+
         # Extract order ID from the selected text
-        selected_order_id = order_choice.split(',')[0].split()[-1]
-        selected_client_id = admin_selected_clients.get(user_id)
+        selected_order_id = int(order_choice.split(':')[1].split(',')[0].strip())
+        print(f"Debug: Extracted Selected Order ID: {selected_order_id}")
 
-        if selected_client_id:
-            # Filter the order to be deleted
-            new_orders = get_order_by_id(selected_order_id)
-            print(new_orders)
+        # Confirm deletion
+        delete_order_by_id(selected_order_id)  # Function to delete the order
+        bot.send_message(message.chat.id, f"Buyurtma ID: {selected_order_id} muvaffaqiyatli o'chirildi.")
+        back_to_menu(message)
 
-            if not new_orders:
-                bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} topilmadi.")
-            else:
-                order = get_order_by_id(selected_order_id)
-                order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
-                telegram_id = get_user_telegram_id(user_id)
-                order_str = order_receipt_str(order_id)
-                delete_order_by_id(selected_order_id)
-                bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} muvaffaqiyatli o`chiirildi.")
-                if telegram_id:
-                    bot.send_message(telegram_id, f"Buyurtmangiz o'chirildi:\n{order_str}")
-                back_to_menu(message)
-        else:
-            bot.send_message(message.chat.id, "Mijoz tanlanmagan. Iltimos, qaytadan urinib ko`ring.")
     except Exception as e:
-        bot.send_message(message.chat.id, f"Buyurtmani o`chirib bo`lmadi: {e}")
-
-        # Reset state
-        user_states[user_id] = None
-        admin_selected_clients[user_id] = None
+        print(f"Error while selecting order for deletion: {e}")
+        bot.send_message(message.chat.id, f"Buyurtma noto'g'ri tanlangan: {e}")
 
 
 def get_client_full_name(user_id):
