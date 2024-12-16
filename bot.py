@@ -220,6 +220,18 @@ def get_client_by_id(client_id):
     conn.close()
     return client
 
+def get_client_discount(client_id):
+    """
+    Retrieve the last applied discount for a client from the database.
+    """
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT discount FROM users WHERE user_id=?", (client_id,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result and result[0] is not None else 0
+
+
 # Handle the selection of a client for editing
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client_for_edit')
 @user_command_wrapper
@@ -251,6 +263,7 @@ def handle_select_client_for_edit(message):
         saved_name = client_data[5] if client_data[5] else "None"
         debt = client_data[6] if client_data[6] else 0
         user_type = client_data[4] if client_data[4] else "None"
+        discount_amount = get_client_discount(selected_client_id)
         client_info = (
             f"Mijoz haqida:\n"
             f"Username: {username}\n"
@@ -258,7 +271,8 @@ def handle_select_client_for_edit(message):
             f"Familiya: {last_name}\n"
             f"Sistemadagi Ism: {saved_name}\n"
             f"Qarzi: {debt:,} so'm\n"
-            f"Type: {user_type.capitalize()}"
+            f"Type: {user_type.capitalize()}\n"
+            f"So'nggi chegirma: {discount_amount:,.0f} so'm"
         )
         bot.send_message(message.chat.id, client_info)
 
@@ -266,6 +280,7 @@ def handle_select_client_for_edit(message):
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familiya"))
         markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
+        markup.add(KeyboardButton("Chegirma qo'shish"))  # New discount option
         markup.add(KeyboardButton("Mijozni o'chirish"))  # New option to delete the client
         markup.add(KeyboardButton("Bosh menyu"))
         user_states[user_id] = 'choosing_field_to_edit'
@@ -311,8 +326,103 @@ def handle_choose_field_to_edit(message):
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(KeyboardButton("Bosh menyu"))
             bot.send_message(message.chat.id, f"Yangi {field_choice.lower()} kiriting:", reply_markup=markup)
+    elif field_choice == "Chegirma qo'shish":
+        user_states[user_id] = 'applying_discount'
+        bot.send_message(message.chat.id, "Chegirma miqdorini kiriting:\n\n"
+                                      "Masalan:\n"
+                                      "- 5% (foiz sifatida)\n"
+                                      "- 10000 (aniq miqdor sifatida)")
     else:
         bot.send_message(message.chat.id, "Invalid choice. Please select a valid field.")
+
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'applying_discount')
+@user_command_wrapper
+def handle_apply_discount(message):
+    user_id = str(message.from_user.id)
+    discount_input = message.text.strip()
+    selected_client_id = admin_selected_clients.get(user_id)
+
+    if discount_input == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if discount_input in commands_list:
+        redirect_to_command(message)
+        return
+
+    try:
+        # Validate and parse discount input
+        conn = create_db_connection()
+        c = conn.cursor()
+
+        # Fetch the current debt for the client
+        c.execute("SELECT debt FROM users WHERE user_id=?", (selected_client_id,))
+        result = c.fetchone()
+        if not result:
+            bot.send_message(message.chat.id, "Mijoz topilmadi.")
+            return
+
+        current_debt = result[0]
+        discount_amount = 0
+
+        if discount_input.endswith("%"):
+            # Apply percentage discount
+            percentage = float(discount_input.rstrip('%'))
+            discount_amount = current_debt * (percentage / 100)
+        else:
+            # Apply fixed amount discount
+            discount_amount = float(discount_input)
+
+        # Ensure discount doesn't exceed the debt
+        if discount_amount > current_debt:
+            bot.send_message(message.chat.id, "Chegirma miqdori qarzdan ko'p bo'lishi mumkin emas.")
+            return
+
+        new_debt = current_debt - discount_amount
+
+        # Update the debt in users table
+        c.execute("UPDATE users SET debt=?, discount=? WHERE user_id=?", (new_debt, discount_amount, selected_client_id))
+
+        # Update the total_debt in the latest order for the user
+        c.execute("""
+            UPDATE orders
+            SET total_debt = ?
+            WHERE user_id = ? AND order_id = (
+                SELECT MAX(order_id) FROM orders WHERE user_id = ?
+            )
+        """, (new_debt, selected_client_id, selected_client_id))
+
+        conn.commit()
+        conn.close()
+
+        # Notify admin
+        bot.send_message(message.chat.id, 
+                         f"Mijozga {discount_amount:,.0f} so'm chegirma qo'llandi.\n"
+                         f"Yangi qarz miqdori: {new_debt:,.0f} so'm.")
+
+        # Notify client
+        client_telegram_id = get_user_telegram_id(selected_client_id)
+        if client_telegram_id:
+            bot.send_message(client_telegram_id, 
+                             f"Sizga {discount_amount:,.0f} so'm chegirma qo'llandi.\n"
+                             f"Hozirgi qarzingiz: {new_debt:,.0f} so'm.")
+
+        # Reset state and show the edit client menu again
+        user_states[user_id] = 'choosing_field_to_edit'
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familiya"))
+        markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
+        markup.add(KeyboardButton("Chegirma qo'shish"))
+        markup.add(KeyboardButton("Mijozni o'chirish"))
+        markup.add(KeyboardButton("Bosh menyu"))
+        bot.send_message(message.chat.id, "Qaysi maydonni o'zgartirishni tanlang:", reply_markup=markup)
+        
+    except ValueError:
+        bot.send_message(message.chat.id, "Chegirma miqdori noto'g'ri kiritilgan. Iltimos, qaytadan kiriting.")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Xatolik yuz berdi: {e}")
+
 
 
 def delete_user(user_id):
@@ -431,8 +541,8 @@ def handle_edit_field(message):
         elif state == 'editing_qarzi':
             try:
                 new_value = int(new_value)
-                c.execute("UPDATE users SET debt=? WHERE user_id=?", (new_value, selected_client_id))
-                bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value:,}.")
+                c.execute("UPDATE users SET debt=?, discount=0 WHERE user_id=?", (new_value, selected_client_id))
+                bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value:,} so'm va chegirma 0 ga qayta tiklandi.")
                 # Notify client about debt change
                 c.execute("SELECT telegram_id FROM users WHERE user_id=?", (selected_client_id,))
                 client_telegram_id = c.fetchone()
@@ -653,7 +763,7 @@ def list_orders(user_id):
             return message
         else:
             return "Buyurtma topilmadi."
-    return "Mijoz topilmadi."
+    return "Mijoz topilmadi."   
 
 
 def list_orders_db(telegram_id):
@@ -1563,7 +1673,7 @@ def handle_list_orders(message):
                     f"\nBuyurtmadan oldingi qarz: {before_order_debt:,} so'm\n"
                     f"Jami buyurtma summasi: {total_sum:,} so'm\n"
                     f"Hozirgi qarz: {total_debt:,} so'm\n"
-                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yo`q'}\n\n\n"
+                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yoq'}\n\n\n"
                 )
             bot.send_message(message.chat.id, message_text)
         else:
@@ -1597,14 +1707,14 @@ def handle_list_orders(message):
 
                 # Append order details to message
                 message_text += (
-                    f"Mijoz: {full_name or 'Noma`lum'}\n"
+                    f"Mijoz: {full_name or 'Nomalum'}\n"
                     f"Buyurtma ID: {order_id}\n"
                     f"Sana: {order_date}\n"
                     f"Mahsulotlar:\n{product_details}\n"
                     f"\nBuyurtmadan oldingi qarz: {before_order_debt:,} so'm\n"
                     f"Jami buyurtma summasi: {total_sum:,} so'm\n"
                     f"Hozirgi qarz: {total_debt:,} so'm\n"
-                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yo`q'}\n\n\n"
+                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yoq'}\n\n\n"
                 )
             bot.send_message(message.chat.id, message_text)
         else:
@@ -1613,6 +1723,7 @@ def handle_list_orders(message):
         bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rish uchun ruxsat yo'q.")
 
     back_to_menu(message)
+
 
 
 # Handle the /list_products command
