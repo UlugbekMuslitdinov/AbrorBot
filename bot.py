@@ -1397,6 +1397,9 @@ def handle_delete_order(message):
     client_choice = message.text.strip()
 
     if client_choice == "Bosh menyu":
+        # Clear the state and navigate back to the main menu
+        user_states[user_id] = None
+        print(f"Debug: User {user_id} selected 'Bosh menyu', resetting state and returning to menu.")
         back_to_menu(message)
         return
 
@@ -1421,9 +1424,23 @@ def handle_delete_order(message):
         else:
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(KeyboardButton("Bosh menyu"))
+
+            # Reset the state and notify the user
+            user_states[user_id] = None
+            print(f"Debug: No clients found for user {user_id}.")
             bot.send_message(message.chat.id, "Bunday mijozlar topilmadi.", reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmani o`chirishga ruxsat yo`q.")
+
+
+# Catch-all handler for "Bosh menyu" in case of state inconsistencies
+@bot.message_handler(func=lambda message: message.text == "Bosh menyu")
+def handle_main_menu_navigation(message):
+    user_id = str(message.from_user.id)
+    print(f"Debug: User {user_id} pressed 'Bosh menyu'. Returning to main menu.")
+    user_states[user_id] = None  # Reset the state
+    back_to_menu(message)
+
 
 
 # Handle the selection of a client for deleting an order
