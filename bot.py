@@ -115,7 +115,8 @@ def back_to_menu(message):
         print("Back to menu")
     else:
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
-        markup.add(KeyboardButton("Buyurtmalarni ko'rish"))
+        markup.add(KeyboardButton("Buyurtmalarni ko'rish"))  # View orders
+        markup.add(KeyboardButton("To'lovni amalga oshirish"))  # New payment button
         user_states[user_id] = None
         bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
         print("Back to menu")
@@ -151,6 +152,28 @@ def get_max_order_id():
                     max_id = order_id
     print("Max order ID:", max_id)
     return max_id
+
+
+
+def create_payments_table():
+    """
+    Create the 'payments' table in the database if it doesn't exist.
+    """
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            is_confirmed INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(user_id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
 
 
 # Admin selects a client to edit
@@ -197,6 +220,18 @@ def get_client_by_id(client_id):
     conn.close()
     return client
 
+def get_client_discount(client_id):
+    """
+    Retrieve the last applied discount for a client from the database.
+    """
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT discount FROM users WHERE user_id=?", (client_id,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result and result[0] is not None else 0
+
+
 # Handle the selection of a client for editing
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_client_for_edit')
 @user_command_wrapper
@@ -228,6 +263,7 @@ def handle_select_client_for_edit(message):
         saved_name = client_data[5] if client_data[5] else "None"
         debt = client_data[6] if client_data[6] else 0
         user_type = client_data[4] if client_data[4] else "None"
+        discount_amount = get_client_discount(selected_client_id)
         client_info = (
             f"Mijoz haqida:\n"
             f"Username: {username}\n"
@@ -235,7 +271,8 @@ def handle_select_client_for_edit(message):
             f"Familiya: {last_name}\n"
             f"Sistemadagi Ism: {saved_name}\n"
             f"Qarzi: {debt:,} so'm\n"
-            f"Type: {user_type.capitalize()}"
+            f"Type: {user_type.capitalize()}\n"
+            f"So'nggi chegirma: {discount_amount:,.0f} so'm"
         )
         bot.send_message(message.chat.id, client_info)
 
@@ -243,6 +280,7 @@ def handle_select_client_for_edit(message):
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familiya"))
         markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
+        markup.add(KeyboardButton("Chegirma qo'shish"))  # New discount option
         markup.add(KeyboardButton("Mijozni o'chirish"))  # New option to delete the client
         markup.add(KeyboardButton("Bosh menyu"))
         user_states[user_id] = 'choosing_field_to_edit'
@@ -288,8 +326,103 @@ def handle_choose_field_to_edit(message):
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(KeyboardButton("Bosh menyu"))
             bot.send_message(message.chat.id, f"Yangi {field_choice.lower()} kiriting:", reply_markup=markup)
+    elif field_choice == "Chegirma qo'shish":
+        user_states[user_id] = 'applying_discount'
+        bot.send_message(message.chat.id, "Chegirma miqdorini kiriting:\n\n"
+                                      "Masalan:\n"
+                                      "- 5% (foiz sifatida)\n"
+                                      "- 10000 (aniq miqdor sifatida)")
     else:
         bot.send_message(message.chat.id, "Invalid choice. Please select a valid field.")
+
+
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'applying_discount')
+@user_command_wrapper
+def handle_apply_discount(message):
+    user_id = str(message.from_user.id)
+    discount_input = message.text.strip()
+    selected_client_id = admin_selected_clients.get(user_id)
+
+    if discount_input == "Bosh menyu":
+        back_to_menu(message)
+        return
+
+    if discount_input in commands_list:
+        redirect_to_command(message)
+        return
+
+    try:
+        # Validate and parse discount input
+        conn = create_db_connection()
+        c = conn.cursor()
+
+        # Fetch the current debt for the client
+        c.execute("SELECT debt FROM users WHERE user_id=?", (selected_client_id,))
+        result = c.fetchone()
+        if not result:
+            bot.send_message(message.chat.id, "Mijoz topilmadi.")
+            return
+
+        current_debt = result[0]
+        discount_amount = 0
+
+        if discount_input.endswith("%"):
+            # Apply percentage discount
+            percentage = float(discount_input.rstrip('%'))
+            discount_amount = current_debt * (percentage / 100)
+        else:
+            # Apply fixed amount discount
+            discount_amount = float(discount_input)
+
+        # Ensure discount doesn't exceed the debt
+        if discount_amount > current_debt:
+            bot.send_message(message.chat.id, "Chegirma miqdori qarzdan ko'p bo'lishi mumkin emas.")
+            return
+
+        new_debt = current_debt - discount_amount
+
+        # Update the debt in users table
+        c.execute("UPDATE users SET debt=?, discount=? WHERE user_id=?", (new_debt, discount_amount, selected_client_id))
+
+        # Update the total_debt in the latest order for the user
+        c.execute("""
+            UPDATE orders
+            SET total_debt = ?
+            WHERE user_id = ? AND order_id = (
+                SELECT MAX(order_id) FROM orders WHERE user_id = ?
+            )
+        """, (new_debt, selected_client_id, selected_client_id))
+
+        conn.commit()
+        conn.close()
+
+        # Notify admin
+        bot.send_message(message.chat.id, 
+                         f"Mijozga {discount_amount:,.0f} so'm chegirma qo'llandi.\n"
+                         f"Yangi qarz miqdori: {new_debt:,.0f} so'm.")
+
+        # Notify client
+        client_telegram_id = get_user_telegram_id(selected_client_id)
+        if client_telegram_id:
+            bot.send_message(client_telegram_id, 
+                             f"Sizga {discount_amount:,.0f} so'm chegirma qo'llandi.\n"
+                             f"Hozirgi qarzingiz: {new_debt:,.0f} so'm.")
+
+        # Reset state and show the edit client menu again
+        user_states[user_id] = 'choosing_field_to_edit'
+        markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+        markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familiya"))
+        markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
+        markup.add(KeyboardButton("Chegirma qo'shish"))
+        markup.add(KeyboardButton("Mijozni o'chirish"))
+        markup.add(KeyboardButton("Bosh menyu"))
+        bot.send_message(message.chat.id, "Qaysi maydonni o'zgartirishni tanlang:", reply_markup=markup)
+        
+    except ValueError:
+        bot.send_message(message.chat.id, "Chegirma miqdori noto'g'ri kiritilgan. Iltimos, qaytadan kiriting.")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"Xatolik yuz berdi: {e}")
+
 
 
 def delete_user(user_id):
@@ -408,8 +541,8 @@ def handle_edit_field(message):
         elif state == 'editing_qarzi':
             try:
                 new_value = int(new_value)
-                c.execute("UPDATE users SET debt=? WHERE user_id=?", (new_value, selected_client_id))
-                bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value:,}.")
+                c.execute("UPDATE users SET debt=?, discount=0 WHERE user_id=?", (new_value, selected_client_id))
+                bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value:,} so'm va chegirma 0 ga qayta tiklandi.")
                 # Notify client about debt change
                 c.execute("SELECT telegram_id FROM users WHERE user_id=?", (selected_client_id,))
                 client_telegram_id = c.fetchone()
@@ -463,6 +596,7 @@ def start(message):
     data = {row[0]: row for row in c.fetchall()}  # Convert rows to a dictionary if needed
     conn.close()
     create_db_tables()
+    create_payments_table()  # Add this line to create the 'payments' table
     user_id = str(message.from_user.id)
 
     if not user_exists(user_id):
@@ -531,41 +665,36 @@ def add_order(user_id, saved_name, debt, order_date, products, total_sum, total_
     conn = create_db_connection()
     c = conn.cursor()
     
-    # Fetch the user data
-    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    user_data = c.fetchone()
+    # Add the new order to the database
+    c.execute(
+        "INSERT INTO orders (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, 0)
+    )
+    order_id = c.lastrowid  # Get the ID of the newly inserted order
+
+    # Add each product to the itemInOrder table
+    for product in products:
+        product_id = get_product_id_by_name(product['product_name'])
+        c.execute(
+            "SELECT product_name, product_price FROM products WHERE product_id = ?", (product_id,)
+        )
+        product_data = c.fetchone()
+        if product_data:
+            product_name, product_price = product_data
+            c.execute(
+                "INSERT INTO itemInOrder (order_id, product_id, product_name, product_price, quantity, price) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (order_id, product_id, product_name, product_price, product['product_quantity'], product['product_price'])
+            )
+    
+    # Update the user's debt in the database
+    c.execute("UPDATE users SET debt = ? WHERE user_id = ?", (total_debt, user_id))
+    conn.commit()
     conn.close()
 
-    # Ensure user_data is a tuple and process it accordingly
-    if user_data:
-        # Add the new order to the database
-        conn = create_db_connection()
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO orders (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, 0)
-        )
-        order_id = c.lastrowid  # Get the ID of the newly inserted order
-
-        # Insert each product into the itemInOrder table
-        for product in products:
-            product_id = get_product_id_by_name(product['product_name'])
-            c.execute(
-                "INSERT INTO itemInOrder (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)",
-                (order_id, product_id, product['product_quantity'], product['product_price'])
-            )
-
-        # Update the user's debt in the database
-        c.execute("UPDATE users SET debt=? WHERE user_id=?", (total_debt, user_id))
-        conn.commit()
-        conn.close()
-
-        print(f"Order added for user {user_id}: Order ID {order_id}")
-        return order_id
-    else:
-        print(f"User {user_id} not found.")
-        return None
+    print(f"Order added for user {user_id}: Order ID {order_id}")
+    return order_id
 
 
 
@@ -634,7 +763,7 @@ def list_orders(user_id):
             return message
         else:
             return "Buyurtma topilmadi."
-    return "Mijoz topilmadi."
+    return "Mijoz topilmadi."   
 
 
 def list_orders_db(telegram_id):
@@ -1132,11 +1261,21 @@ def get_user_telegram_id(user_id):
 def order_receipt_str(order_id):
     conn = create_db_connection()
     c = conn.cursor()
+    
+    # Fetch the order details
     c.execute("SELECT * FROM orders WHERE order_id=?", (order_id,))
     order = c.fetchone()
-    c.execute("SELECT product_name, quantity, price FROM itemInOrder JOIN products ON itemInOrder.product_id = products.product_id WHERE order_id=?", (order_id,))
+
+    # Fetch the product details from itemInOrder (use itemInOrder.product_name to avoid ambiguity)
+    c.execute("""
+        SELECT itemInOrder.product_name, itemInOrder.quantity, itemInOrder.price 
+        FROM itemInOrder
+        WHERE itemInOrder.order_id=?
+    """, (order_id,))
     products = c.fetchall()
     conn.close()
+
+    # Format the receipt
     message = f"Buyurtma ID: {order[0]}\n"
     message += f"Sana: {order[2]}\n\n"
     message += "Mahsulotlar:\n"
@@ -1147,6 +1286,7 @@ def order_receipt_str(order_id):
     message += f"Oldindan bor qarz: {order[6]:,}\n"
     message += f"Jami qarz: {order[5]:,}\n"
     return message
+
 
 # Step 6: Handle the confirmation of the order
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'confirming_order')
@@ -1257,6 +1397,9 @@ def handle_delete_order(message):
     client_choice = message.text.strip()
 
     if client_choice == "Bosh menyu":
+        # Clear the state and navigate back to the main menu
+        user_states[user_id] = None
+        print(f"Debug: User {user_id} selected 'Bosh menyu', resetting state and returning to menu.")
         back_to_menu(message)
         return
 
@@ -1281,9 +1424,23 @@ def handle_delete_order(message):
         else:
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(KeyboardButton("Bosh menyu"))
+
+            # Reset the state and notify the user
+            user_states[user_id] = None
+            print(f"Debug: No clients found for user {user_id}.")
             bot.send_message(message.chat.id, "Bunday mijozlar topilmadi.", reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmani o`chirishga ruxsat yo`q.")
+
+
+# Catch-all handler for "Bosh menyu" in case of state inconsistencies
+@bot.message_handler(func=lambda message: message.text == "Bosh menyu")
+def handle_main_menu_navigation(message):
+    user_id = str(message.from_user.id)
+    print(f"Debug: User {user_id} pressed 'Bosh menyu'. Returning to main menu.")
+    user_states[user_id] = None  # Reset the state
+    back_to_menu(message)
+
 
 
 # Handle the selection of a client for deleting an order
@@ -1295,38 +1452,89 @@ def handle_select_client_for_order_deletion(message):
     client_choice = message.text.strip()
 
     if client_choice == "Bosh menyu":
+        # Go to the main menu from the client list
+        print(f"Debug: User {user_id} selected 'Bosh menyu' - returning to main menu")
+        user_states[user_id] = None
         back_to_menu(message)
         return
-    
+
     if client_choice in commands_list:
         redirect_to_command(message)
         return
 
     try:
+        # Ensure the client choice contains a valid client ID
+        if "(" not in client_choice or ")" not in client_choice:
+            bot.send_message(message.chat.id, "Mijoz tanlash noto'g'ri. Qayta urinib ko'ring.")
+            return
+
         # Extract client ID from the selected text (the ID is in parentheses)
         selected_client_id = client_choice.split('(')[-1].strip(')')
         print(f"Debug: Extracted Selected Client ID: {selected_client_id}")
         admin_selected_clients[user_id] = selected_client_id
 
         # Fetch orders by user_id (client ID in this case)
-        orders = fetch_orders_by_user_id(selected_client_id)  # New function to fetch orders directly by user_id
+        orders = fetch_orders_by_user_id(selected_client_id)
         print(f"Debug: Fetched Orders for Client ID {selected_client_id}: {orders}")
 
         if orders:
+            # Create a ReplyKeyboardMarkup for the orders
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             for order in orders:
-                markup.add(KeyboardButton(
-                    f"Buyurtma ID: {order[0]}, Miqdor: {order[3]:,}, Sana: {parse_date_safe(order[2])}"))
+                try:
+                    order_id = order[0]
+                    order_date = parse_date_safe(order[2])
+                    order_total = order[3]
+                    markup.add(KeyboardButton(f"Buyurtma ID: {order_id}, Miqdor: {order_total:,}, Sana: {order_date}"))
+                except Exception as e:
+                    print(f"Error processing order {order}: {e}")
+
+            # Add the "Bosh menyu" button
             markup.add(KeyboardButton("Bosh menyu"))
+
+            # Update user state and send the menu
             user_states[user_id] = 'selecting_order_for_deletion'
             bot.send_message(message.chat.id, "O'chirish uchun buyurtmani tanlang:", reply_markup=markup)
         else:
+            # No orders found, provide a fallback menu
+            print(f"Debug: No orders found for Client ID {selected_client_id}")
             markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
             markup.add(KeyboardButton("Bosh menyu"))
             bot.send_message(message.chat.id, "Mijozda buyurtmalar topilmadi.", reply_markup=markup)
 
     except Exception as e:
-        bot.send_message(message.chat.id, f"Mijoz noto`g`ri tanlangan: {e}")
+        print(f"Error while selecting client for order deletion: {e}")
+        bot.send_message(message.chat.id, f"Mijoz noto'g'ri tanlangan: {e}")
+
+
+def show_clients_list(message):
+    """
+    Show the list of clients to the admin for selection.
+    """
+    user_id = str(message.from_user.id)
+
+    try:
+        # Fetch the list of clients
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT user_id, first_name, last_name FROM users WHERE type='client'")
+        clients = c.fetchall()
+        conn.close()
+
+        if clients:
+            markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
+            for client in clients:
+                client_id, first_name, last_name = client
+                markup.add(KeyboardButton(f"{first_name} {last_name} ({client_id})"))
+            markup.add(KeyboardButton("Bosh menyu"))
+            user_states[user_id] = 'selecting_client_for_order_deletion'
+            bot.send_message(message.chat.id, "Mijozni tanlang:", reply_markup=markup)
+        else:
+            bot.send_message(message.chat.id, "Mijozlar topilmadi.")
+    except Exception as e:
+        print(f"Error fetching clients: {e}")
+        bot.send_message(message.chat.id, f"Mijozlar ro'yxatini yuklashda xatolik: {e}")
+
 
 def parse_date_safe(date_str):
     try:
@@ -1352,7 +1560,13 @@ def fetch_orders_by_user_id(user_id):
 def get_order_by_id(order_id):
     conn = create_db_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM orders WHERE order_id=?", (order_id,))
+    c.execute("""
+        SELECT orders.order_id, orders.user_id, orders.order_date, 
+               orders.total_sum, orders.total_quantity, 
+               orders.total_debt, orders.before_order_debt, orders.is_confirmed
+        FROM orders 
+        WHERE orders.order_id=?
+    """, (order_id,))
     order = c.fetchone()
     conn.close()
     return order
@@ -1361,50 +1575,60 @@ def get_order_by_id(order_id):
 def delete_order_by_id(order_id):
     conn = create_db_connection()
     c = conn.cursor()
-    user_id, order_total_sum = c.execute("SELECT user_id, total_sum FROM orders WHERE order_id=?", (order_id,)).fetchone()
+
+    # Fetch user_id and order_total_sum for updating user's debt
+    c.execute("SELECT user_id, total_sum FROM orders WHERE order_id=?", (order_id,))
+    user_id, order_total_sum = c.fetchone()
+
+    # Delete items in the order
     c.execute("DELETE FROM itemInOrder WHERE order_id=?", (order_id,))
+
+    # Delete the order itself
     c.execute("DELETE FROM orders WHERE order_id=?", (order_id,))
+
+    # Update the user's debt
     c.execute("UPDATE users SET debt=debt-? WHERE user_id=?", (order_total_sum, user_id))
     conn.commit()
     conn.close()
 
-# Handle the selection of an order to delete
-@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
+
+# Handle the selection of an order for deletion
+@bot.message_handler(
+    func=lambda message: user_states.get(str(message.from_user.id)) == 'selecting_order_for_deletion')
 @user_command_wrapper
 def handle_select_order_for_deletion(message):
     user_id = str(message.from_user.id)
     order_choice = message.text.strip()
 
+    if order_choice == "Bosh menyu":
+        # Go back to the client list from the order list
+        print(f"Debug: User {user_id} selected 'Bosh menyu' - returning to client list")
+        user_states[user_id] = 'selecting_client_for_order_deletion'
+        show_clients_list(message)  # Function to show the list of clients
+        return
+
+    if order_choice in commands_list:
+        redirect_to_command(message)
+        return
+
     try:
+        # Ensure the order choice contains a valid order ID
+        if "Buyurtma ID:" not in order_choice:
+            bot.send_message(message.chat.id, "Buyurtma tanlash noto'g'ri. Qayta urinib ko'ring.")
+            return
+
         # Extract order ID from the selected text
-        selected_order_id = order_choice.split(',')[0].split()[-1]
-        selected_client_id = admin_selected_clients.get(user_id)
+        selected_order_id = int(order_choice.split(':')[1].split(',')[0].strip())
+        print(f"Debug: Extracted Selected Order ID: {selected_order_id}")
 
-        if selected_client_id:
-            # Filter the order to be deleted
-            new_orders = get_order_by_id(selected_order_id)
-            print(new_orders)
+        # Confirm deletion
+        delete_order_by_id(selected_order_id)  # Function to delete the order
+        bot.send_message(message.chat.id, f"Buyurtma ID: {selected_order_id} muvaffaqiyatli o'chirildi.")
+        back_to_menu(message)
 
-            if not new_orders:
-                bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} topilmadi.")
-            else:
-                order = get_order_by_id(selected_order_id)
-                order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
-                telegram_id = get_user_telegram_id(user_id)
-                order_str = order_receipt_str(order_id)
-                delete_order_by_id(selected_order_id)
-                bot.send_message(message.chat.id, f"Buyurtma {selected_order_id} muvaffaqiyatli o`chiirildi.")
-                if telegram_id:
-                    bot.send_message(telegram_id, f"Buyurtmangiz o'chirildi:\n{order_str}")
-                back_to_menu(message)
-        else:
-            bot.send_message(message.chat.id, "Mijoz tanlanmagan. Iltimos, qaytadan urinib ko`ring.")
     except Exception as e:
-        bot.send_message(message.chat.id, f"Buyurtmani o`chirib bo`lmadi: {e}")
-
-        # Reset state
-        user_states[user_id] = None
-        admin_selected_clients[user_id] = None
+        print(f"Error while selecting order for deletion: {e}")
+        bot.send_message(message.chat.id, f"Buyurtma noto'g'ri tanlangan: {e}")
 
 
 def get_client_full_name(user_id):
@@ -1445,16 +1669,18 @@ def handle_list_orders(message):
                 conn = create_db_connection()
                 c = conn.cursor()
                 c.execute("""
-                    SELECT p.product_name, io.quantity 
-                    FROM itemInOrder io 
-                    INNER JOIN products p ON io.product_id = p.product_id 
-                    WHERE io.order_id = ?
+                    SELECT product_name, quantity, product_price 
+                    FROM itemInOrder 
+                    WHERE order_id = ?
                 """, (order_id,))
                 products = c.fetchall()
                 conn.close()
 
                 # Format product list
-                product_details = "\n".join([f"{product[0]} ({product[1]})" for product in products])
+                product_details = "\n".join([
+                    f"{product[0]} ({product[1]} x {product[2]:,})"
+                    for product in products
+                ])
 
                 # Append order details to message
                 message_text += (
@@ -1464,7 +1690,7 @@ def handle_list_orders(message):
                     f"\nBuyurtmadan oldingi qarz: {before_order_debt:,} so'm\n"
                     f"Jami buyurtma summasi: {total_sum:,} so'm\n"
                     f"Hozirgi qarz: {total_debt:,} so'm\n"
-                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yo`q'}\n\n\n"
+                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yoq'}\n\n\n"
                 )
             bot.send_message(message.chat.id, message_text)
         else:
@@ -1482,28 +1708,30 @@ def handle_list_orders(message):
                 conn = create_db_connection()
                 c = conn.cursor()
                 c.execute("""
-                    SELECT p.product_name, io.quantity 
-                    FROM itemInOrder io 
-                    INNER JOIN products p ON io.product_id = p.product_id 
-                    WHERE io.order_id = ?
+                    SELECT product_name, quantity, product_price 
+                    FROM itemInOrder 
+                    WHERE order_id = ?
                 """, (order_id,))
                 products = c.fetchall()
                 conn.close()
 
                 # Format product list
-                product_details = "\n".join([f"{product[0]} ({product[1]})" for product in products])
+                product_details = "\n".join([
+                    f"{product[0]} ({product[1]} x {product[2]:,})"
+                    for product in products
+                ])
                 full_name = get_client_full_name(user_id)
 
                 # Append order details to message
                 message_text += (
-                    f"Mijoz: {full_name or 'Noma`lum'}\n"
+                    f"Mijoz: {full_name or 'Nomalum'}\n"
                     f"Buyurtma ID: {order_id}\n"
                     f"Sana: {order_date}\n"
                     f"Mahsulotlar:\n{product_details}\n"
                     f"\nBuyurtmadan oldingi qarz: {before_order_debt:,} so'm\n"
                     f"Jami buyurtma summasi: {total_sum:,} so'm\n"
                     f"Hozirgi qarz: {total_debt:,} so'm\n"
-                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yo`q'}\n\n\n"
+                    f"Tasdiqlangan: {'Ha' if is_confirmed else 'Yoq'}\n\n\n"
                 )
             bot.send_message(message.chat.id, message_text)
         else:
@@ -1512,6 +1740,7 @@ def handle_list_orders(message):
         bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rish uchun ruxsat yo'q.")
 
     back_to_menu(message)
+
 
 
 # Handle the /list_products command
@@ -1627,6 +1856,162 @@ def handle_list_products(message):
             bot.send_message(message.chat.id, f"Buyurtma ID {order_id} topilmadi.")
     else:
         bot.send_message(message.chat.id, "Sizda buyurtmalarni ko'rishga ruxsat yo'q.")
+
+
+
+
+
+@bot.message_handler(func=lambda message: message.text == "To'lovni amalga oshirish")
+def handle_payment_button(message):
+    handle_pay_debt(message)  # Reuse the /pay_debt logic
+
+
+def list_admins():
+    """
+    Retrieve the Telegram IDs of all admins from the database.
+    """
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT telegram_id FROM users WHERE type='admin'")
+    admins = [row[0] for row in c.fetchall()]
+    conn.close()
+    return admins
+
+
+# Add a table for payments
+def create_payments_table():
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS payments
+                 (payment_id INTEGER PRIMARY KEY, user_id INTEGER, amount INTEGER, is_confirmed INTEGER DEFAULT 0,
+                  FOREIGN KEY(user_id) REFERENCES users(user_id))''')
+    conn.commit()
+    conn.close()
+
+# Handle the /pay_debt command
+@bot.message_handler(commands=['pay_debt'])
+def handle_pay_debt(message):
+    user_id = str(message.from_user.id)
+    if is_client(user_id):
+        bot.send_message(message.chat.id, "To'lagan summangizni kiriting:")
+        user_states[user_id] = 'awaiting_payment_amount'
+    else:
+        bot.send_message(message.chat.id, "Siz mijoz emassiz. Ushbu buyruq faqat mijozlar uchun mavjud.")
+
+# Receive payment amount
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'awaiting_payment_amount')
+def receive_payment_amount(message):
+    user_id = str(message.from_user.id)
+    try:
+        amount = int(message.text.strip())
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO payments (user_id, amount) VALUES (?, ?)", (user_id, amount))
+        conn.commit()
+        payment_id = c.lastrowid
+        conn.close()
+
+        # Notify admins
+        admins = list_admins()  # This now retrieves the admin Telegram IDs
+        for admin in admins:
+            confirm_buttons = InlineKeyboardMarkup()
+            confirm_buttons.add(
+                InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_payment_{payment_id}"),
+                InlineKeyboardButton("Rad etish", callback_data=f"reject_payment_{payment_id}")
+            )
+            bot.send_message(admin, f"Mijoz {message.from_user.first_name} {message.from_user.last_name} "
+                                    f"{amount:,} so'm to'lov qildi.", reply_markup=confirm_buttons)
+
+
+        bot.send_message(message.chat.id, "To'lovingiz tasdiq uchun yuborildi.")
+        user_states[user_id] = None
+    except ValueError:
+        bot.send_message(message.chat.id, "To'lov summasi noto'g'ri. Iltimos, qaytadan kiriting.")
+
+    back_to_menu(message)
+
+# Handle admin confirmation or rejection
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_payment_") or call.data.startswith("reject_payment_"))
+def handle_payment_confirmation(call):
+    payment_id = int(call.data.split("_")[-1])
+    conn = create_db_connection()
+    c = conn.cursor()
+    
+    # Get user_id and amount from the payments table
+    c.execute("SELECT user_id, amount FROM payments WHERE payment_id=?", (payment_id,))
+    payment = c.fetchone()
+
+    if payment:
+        telegram_id, amount = payment
+
+        # Fetch internal user_id using telegram_id
+        c.execute("SELECT user_id FROM users WHERE telegram_id=?", (telegram_id,))
+        user_row = c.fetchone()
+        if not user_row:
+            print(f"Error: No user found with telegram_id={telegram_id}")
+            bot.send_message(call.message.chat.id, "Xatolik: Foydalanuvchi topilmadi.")
+            return
+
+        internal_user_id = user_row[0]
+
+        if call.data.startswith("confirm_payment_"):
+            # Debug: Before updating the debt
+            print(f"Debug: Attempting to fetch debt for user_id={internal_user_id}")
+            c.execute("SELECT debt FROM users WHERE user_id=?", (internal_user_id,))
+            current_debt = c.fetchone()
+            print(f"Debug: Query result for user_id={internal_user_id}: {current_debt}")
+
+            if current_debt is None:
+                print(f"Error: No user found with user_id={internal_user_id}")
+                bot.send_message(call.message.chat.id, "Xatolik: Foydalanuvchi topilmadi.")
+                return
+
+            current_debt = current_debt[0]
+            print(f"User {internal_user_id} current debt before payment: {current_debt}")
+
+            # Confirm payment and reduce debt
+            c.execute("UPDATE payments SET is_confirmed=1 WHERE payment_id=?", (payment_id,))
+            c.execute("UPDATE users SET debt=debt-? WHERE user_id=?", (amount, internal_user_id))
+            
+            # Also update 'total_debt' in the orders table
+            c.execute("""
+                UPDATE orders
+                SET total_debt = (
+                    SELECT debt FROM users WHERE user_id=?
+                )
+                WHERE user_id=? AND is_confirmed=1
+            """, (internal_user_id, internal_user_id))
+            
+            conn.commit()
+
+            # Debug: After updating the debt
+            c.execute("SELECT debt FROM users WHERE user_id=?", (internal_user_id,))
+            updated_debt = c.fetchone()
+            if updated_debt:
+                updated_debt = updated_debt[0]
+                print(f"User {internal_user_id} debt after payment: {updated_debt}")
+            else:
+                print(f"Error: Failed to fetch updated debt for user_id={internal_user_id}")
+
+            conn.close()
+
+            bot.send_message(call.message.chat.id, "To'lov tasdiqlandi.")
+            client_telegram_id = get_user_telegram_id(internal_user_id)
+            if client_telegram_id:
+                bot.send_message(client_telegram_id, f"Sizning {amount:,} so'm to'lovingiz tasdiqlandi. Rahmat!")
+        elif call.data.startswith("reject_payment_"):
+            # Reject payment
+            c.execute("DELETE FROM payments WHERE payment_id=?", (payment_id,))
+            conn.commit()
+            conn.close()
+
+            bot.send_message(call.message.chat.id, "To'lov rad etildi.")
+            client_telegram_id = get_user_telegram_id(internal_user_id)
+            if client_telegram_id:
+                bot.send_message(client_telegram_id, f"Sizning {amount:,} so'm to'lovingiz rad etildi.")
+    else:
+        bot.send_message(call.message.chat.id, "To'lov topilmadi.")
+
 
 
 
