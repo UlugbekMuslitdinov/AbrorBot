@@ -1317,6 +1317,8 @@ def handle_confirm_order(message):
         total_quantity = sum(p['product_quantity'] for p in products)
         before_order_debt = get_user_debt(selected_user_id)
         print(before_order_debt, selected_user_id)
+        if before_order_debt is None:
+            before_order_debt = 0
         total_debt = before_order_debt + total_sum
 
         # Add order
