@@ -116,7 +116,6 @@ def back_to_menu(message):
     else:
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add(KeyboardButton("Buyurtmalarni ko'rish"))  # View orders
-        markup.add(KeyboardButton("To'lovni amalga oshirish"))  # New payment button
         user_states[user_id] = None
         bot.send_message(message.chat.id, "Menyu", reply_markup=markup)
         print("Back to menu")
@@ -280,7 +279,7 @@ def handle_select_client_for_edit(message):
         markup = ReplyKeyboardMarkup(one_time_keyboard=True, resize_keyboard=True)
         markup.add(KeyboardButton("Username"), KeyboardButton("Ism"), KeyboardButton("Familiya"))
         markup.add(KeyboardButton("Sistemadagi Ism"), KeyboardButton("Qarzi"), KeyboardButton("Type"))
-        markup.add(KeyboardButton("Chegirma qo'shish"))  # New discount option
+        markup.add(KeyboardButton("Chegirma qo'shish"), KeyboardButton("To'lovni amalga oshirish"))  # New discount option
         markup.add(KeyboardButton("Mijozni o'chirish"))  # New option to delete the client
         markup.add(KeyboardButton("Bosh menyu"))
         user_states[user_id] = 'choosing_field_to_edit'
@@ -303,6 +302,11 @@ def handle_choose_field_to_edit(message):
 
     if field_choice in commands_list:
         redirect_to_command(message)
+        return
+
+    if field_choice == "To'lovni amalga oshirish":
+        user_states[user_id] = 'awaiting_payment_amount'
+        bot.send_message(message.chat.id, "To'lov miqdorini kiriting:")
         return
 
     if field_choice == "Mijozni o'chirish":
@@ -1861,11 +1865,108 @@ def handle_list_products(message):
 
 
 
+# Handle payment amount entry by admin
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'awaiting_payment_amount')
+@user_command_wrapper
+def handle_payment_amount_entry(message):
+    user_id = str(message.from_user.id)
+    payment_input = message.text.strip()
+    selected_client_id = admin_selected_clients.get(user_id)
+
+    try:
+        payment_amount = int(payment_input)
+        if payment_amount <= 0:
+            raise ValueError("Payment must be greater than zero.")
+
+        # Notify client for confirmation
+        client_telegram_id = get_user_telegram_id(selected_client_id)
+        if client_telegram_id:
+            confirm_buttons = InlineKeyboardMarkup()
+            confirm_buttons.add(InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_payment_{payment_amount}"))
+            confirm_buttons.add(InlineKeyboardButton("Bekor qilish", callback_data="cancel_payment"))
+
+            bot.send_message(
+                client_telegram_id,
+                f"To'lov miqdori: {payment_amount:,} so'm. Iltimos, tasdiqlang.",
+                reply_markup=confirm_buttons
+            )
+
+            bot.send_message(message.chat.id, "Mijozga tasdiq so'rovi yuborildi.")
+            back_to_menu(message)
+        else:
+            bot.send_message(message.chat.id, "Mijozning Telegram IDsi topilmadi.")
+
+        user_states[user_id] = None
+    except ValueError:
+        bot.send_message(message.chat.id, "Noto'g'ri to'lov miqdori. Iltimos, qaytadan kiriting.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_payment_"))
+def handle_client_payment_confirmation(call):
+    payment_amount = int(call.data.split("_")[-1])
+    user_id = str(call.from_user.id)
+
+    # Fetch user from admin selection context
+    for admin_id, client_id in admin_selected_clients.items():
+        client_telegram_id = get_user_telegram_id(client_id)
+        if str(client_telegram_id) == user_id:
+            # Update the client's debt
+            conn = create_db_connection()
+            c = conn.cursor()
+
+            # Get current debt
+            c.execute("SELECT debt FROM users WHERE user_id=?", (client_id,))
+            current_debt = c.fetchone()[0]
+
+            # Calculate new debt
+            new_debt = max(0, current_debt - payment_amount)
+
+            # Update the user's debt
+            c.execute("UPDATE users SET debt=? WHERE user_id=?", (new_debt, client_id))
+
+            # Get the latest order_id
+            c.execute("""
+                SELECT order_id 
+                FROM orders 
+                WHERE user_id=? 
+                ORDER BY order_id DESC LIMIT 1
+            """, (client_id,))
+            latest_order = c.fetchone()
+
+            if latest_order:
+                latest_order_id = latest_order[0]
+
+                # Update the total_debt for the latest order
+                c.execute("""
+                    UPDATE orders 
+                    SET total_debt=? 
+                    WHERE order_id=?
+                """, (new_debt, latest_order_id))
+
+            conn.commit()
+            conn.close()
+
+            # Notify the client
+            bot.send_message(call.message.chat.id, "To'lov tasdiqlandi. Rahmat!")
+
+            # Notify the admin
+            bot.send_message(admin_id, f"Mijoz qarzi yangilandi. Hozirgi qarz: {new_debt:,} so'm.")
+
+            # Reset state and display menu
+            back_to_menu(call.message)
+            return
 
 
-@bot.message_handler(func=lambda message: message.text == "To'lovni amalga oshirish")
-def handle_payment_button(message):
-    handle_pay_debt(message)  # Reuse the /pay_debt logic
+# Handle client cancelation
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_payment")
+def handle_client_payment_cancelation(call):
+    bot.send_message(call.message.chat.id, "To'lov bekor qilindi.")
+
+
+
+
+# @bot.message_handler(func=lambda message: message.text == "To'lovni amalga oshirish")
+# def handle_payment_button(message):
+#     handle_pay_debt(message)  # Reuse the /pay_debt logic
 
 
 def list_admins():
@@ -1891,14 +1992,14 @@ def create_payments_table():
     conn.close()
 
 # Handle the /pay_debt command
-@bot.message_handler(commands=['pay_debt'])
-def handle_pay_debt(message):
-    user_id = str(message.from_user.id)
-    if is_client(user_id):
-        bot.send_message(message.chat.id, "To'lagan summangizni kiriting:")
-        user_states[user_id] = 'awaiting_payment_amount'
-    else:
-        bot.send_message(message.chat.id, "Siz mijoz emassiz. Ushbu buyruq faqat mijozlar uchun mavjud.")
+# @bot.message_handler(commands=['pay_debt'])
+# def handle_pay_debt(message):
+#     user_id = str(message.from_user.id)
+#     if is_client(user_id):
+#         bot.send_message(message.chat.id, "To'lagan summangizni kiriting:")
+#         user_states[user_id] = 'awaiting_payment_amount'
+#     else:
+#         bot.send_message(message.chat.id, "Siz mijoz emassiz. Ushbu buyruq faqat mijozlar uchun mavjud.")
 
 # Receive payment amount
 @bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) == 'awaiting_payment_amount')
