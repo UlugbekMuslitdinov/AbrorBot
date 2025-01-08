@@ -1151,7 +1151,7 @@ def add_new_product(message):
         conn = create_db_connection()
         c = conn.cursor()
         product_name, product_price = user_input.split(", ")
-        c.execute("INSERT INTO products (product_name, product_price) VALUES (?, ?)", (product_name, product_price))
+        c.execute("INSERT INTO products (product_name, product_price) VALUES (?, ?)", (product_name.strip(), product_price))
         conn.commit()
         conn.close()
         keyboard = products_list_keyboard()
