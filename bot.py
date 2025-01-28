@@ -1357,38 +1357,84 @@ def handle_confirm_order(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_order_"))
 def handle_confirm_order_callback(call):
     order_id = int(call.data.split("_")[-1])
-    order = get_order_by_id(order_id)
-    if order:
-        conn = create_db_connection()
-        c = conn.cursor()
-        c.execute("UPDATE orders SET is_confirmed=1 WHERE order_id=?", (order_id,))
-        conn.commit()
+
+    conn = create_db_connection()
+    c = conn.cursor()
+
+    # Check if already confirmed
+    c.execute("SELECT is_confirmed FROM orders WHERE order_id=?", (order_id,))
+    is_confirmed = c.fetchone()[0]
+
+    if is_confirmed:
+        bot.answer_callback_query(call.id, "Bu buyurtma allaqachon tasdiqlangan.")
+        return
+
+    # Confirm the order
+    c.execute("UPDATE orders SET is_confirmed=1 WHERE order_id=?", (order_id,))
+    conn.commit()
+
+    # Get order details for confirmation message
+    order_summary = order_receipt_str(order_id)
+
+    # Notify the client with the order details
+    bot.edit_message_text(
+        text=f"✅ Buyurtma tasdiqlandi!\n\n{order_summary}",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        parse_mode="Markdown"
+    )
+
+    # Notify the admin(s)
+    c.execute("SELECT telegram_id FROM users WHERE type='admin'")
+    admins = c.fetchall()
+    conn.close()
+
+    if admins:
+        for admin in admins:
+            bot.send_message(admin[0], f"📢 *Buyurtma tasdiqlandi!*\n\n{order_summary}", parse_mode="Markdown")
+
+    bot.answer_callback_query(call.id, "Buyurtma tasdiqlandi.")
+
+
+def order_receipt_str(order_id):
+    conn = create_db_connection()
+    c = conn.cursor()
+
+    # Fetch order details
+    c.execute("SELECT * FROM orders WHERE order_id=?", (order_id,))
+    order = c.fetchone()
+
+    if not order:
         conn.close()
+        return "Buyurtma topilmadi."
 
-        # Notify the client
-        bot.send_message(call.message.chat.id, "Buyurtma tasdiqlandi. Rahmat!")
+    order_id, user_id, order_date, total_sum, total_quantity, total_debt, before_order_debt, is_confirmed = order
 
-        # Reset client state
-        user_id = str(call.from_user.id)
-        if user_id in user_states:
-            user_states[user_id] = None
+    # Fetch products in the order
+    c.execute("""
+        SELECT itemInOrder.product_name, itemInOrder.quantity, itemInOrder.price 
+        FROM itemInOrder
+        WHERE itemInOrder.order_id=?
+    """, (order_id,))
+    products = c.fetchall()
+    conn.close()
 
-        # Notify the admin
-        conn = create_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT telegram_id FROM users WHERE type='admin'")  # Assuming admins have type='admin'
-        admins = c.fetchall()
-        conn.close()
+    # Format the receipt message
+    message = f"📦 Buyurtma ID: {order_id}\n📅 Sana: {order_date}\n\n"
+    message += "🛍 Mahsulotlar:\n"
+    for product in products:
+        product_name, quantity, price = product
+        total_price = quantity * price
+        message += f"- {product_name}: {quantity} x {price:,} = {total_price:,} so'm\n"
 
-        if admins:
-            order_summary = order_receipt_str(order_id)
-            for admin in admins:
-                admin_telegram_id = admin[0]
-                bot.send_message(admin_telegram_id, f"Buyurtma tasdiqlandi:\n{order_summary}")
-        else:
-            print("Admin Telegram IDs not found")
-    else:
-        bot.send_message(call.message.chat.id, "Buyurtma topilmadi.")
+    message += f"\n💰 Jami summa: {total_sum:,} so'm\n"
+    message += f"📦 Jami miqdor: {total_quantity}\n"
+    message += f"📉 Oldindan bor qarz: {before_order_debt:,} so'm\n"
+    message += f"💳 Jami qarz: {total_debt:,} so'm\n"
+
+    return message
+
+
 
 
 # Example of using delete_order function
