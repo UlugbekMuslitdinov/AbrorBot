@@ -1987,6 +1987,14 @@ def handle_payment_confirmation(call):
     payment_id = int(call.data.split("_")[-1])
     conn = create_db_connection()
     c = conn.cursor()
+
+    # Check if already confirmed
+    c.execute("SELECT is_confirmed FROM payments WHERE payment_id=?", (payment_id,))
+    is_confirmed = c.fetchone()[0]
+
+    if is_confirmed:
+        bot.answer_callback_query(call.id, "Bu to'lov allaqachon tasdiqlangan.")
+        return
     
     try:
         # Get user_id (telegram_id) and amount from the payments table
@@ -2025,7 +2033,26 @@ def handle_payment_confirmation(call):
                     conn.commit()  # Commit all changes
 
                     # Notify admin and the user
-                    bot.send_message(call.message.chat.id, "To'lov tasdiqlandi.")
+                    bot.edit_message_text(
+                        text="✅ To'lov tasdiqlandi!",
+                        chat_id=call.message.chat.id,
+                        message_id=call.message.message_id
+                    )
+
+                    admins = list_admins()
+                    print(f"Admins: {admins}")
+                    for admin in admins:
+                        try:
+                            bot.edit_message_text(
+                                text="✅ To'lov tasdiqlandi!",
+                                chat_id=admin[0],
+                                message_id=call.message.message_id
+                            )
+                        except Exception as e:
+                            print(f"Error updating message for admin {admin[0]}: {e}")
+
+                    bot.answer_callback_query(call.id, "To'lov tasdiqlandi.")
+
                     if telegram_id:
                         bot.send_message(telegram_id, f"Sizning {amount:,} so'm to'lovingiz tasdiqlandi. Rahmat!")
                 elif call.data.startswith("reject_payment_"):
