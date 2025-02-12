@@ -481,8 +481,9 @@ def handle_confirm_client_deletion(message):
 
 
 # Handle updating the selected field
-@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) and user_states.get(
-    str(message.from_user.id)).startswith('editing'))
+@bot.message_handler(func=lambda message: user_states.get(str(message.from_user.id)) 
+                     and isinstance(user_states.get(str(message.from_user.id)), str) 
+                     and user_states.get(str(message.from_user.id)).startswith('editing'))
 def handle_edit_field(message):
     user_id = str(message.from_user.id)
     state = user_states.get(user_id)
@@ -497,7 +498,6 @@ def handle_edit_field(message):
         return
 
     if state.startswith('editing_product_'):
-        # Handle product editing
         selected_product_id = cur_product.get(user_id)
         if not selected_product_id:
             bot.send_message(message.chat.id, "Mahsulot tanlanmadi. Iltimos, qayta urinib ko'ring.")
@@ -520,13 +520,11 @@ def handle_edit_field(message):
                 bot.send_message(message.chat.id, "Narx noto'g'ri formatda. Iltimos, raqam kiriting.")
 
         conn.close()
-        # Reset state and product selection
         user_states[user_id] = None
         cur_product[user_id] = None
         back_to_menu(message)
 
     elif state.startswith('editing_'):
-        # Handle client-related editing
         selected_client_id = admin_selected_clients.get(user_id)
         if not selected_client_id:
             bot.send_message(message.chat.id, "Mijoz tanlanmangan. Iltimos, qaytadan urinib ko`ring.")
@@ -552,7 +550,6 @@ def handle_edit_field(message):
                 new_value = int(new_value)
                 c.execute("UPDATE users SET debt=?, discount=0 WHERE user_id=?", (new_value, selected_client_id))
                 bot.send_message(message.chat.id, f"Qarz o`zgartirildi {new_value:,} so'm va chegirma 0 ga qayta tiklandi.")
-                # Notify client about debt change
                 c.execute("SELECT telegram_id FROM users WHERE user_id=?", (selected_client_id,))
                 client_telegram_id = c.fetchone()
                 if client_telegram_id and client_telegram_id[0]:
@@ -569,7 +566,6 @@ def handle_edit_field(message):
         conn.commit()
         conn.close()
 
-        # Reset state and client selection
         user_states[user_id] = None
         admin_selected_clients[user_id] = None
         back_to_menu(message)
@@ -1965,30 +1961,68 @@ def receive_payment_amount(message):
     user_id = str(message.from_user.id)
     try:
         amount = int(message.text.strip())
-        conn = create_db_connection()
-        c = conn.cursor()
-        c.execute("INSERT INTO payments (user_id, amount) VALUES (?, ?)", (user_id, amount))
-        conn.commit()
-        payment_id = c.lastrowid
-        conn.close()
 
-        # Notify admins
-        admins = list_admins()  # This now retrieves the admin Telegram IDs
-        for admin in admins:
-            confirm_buttons = InlineKeyboardMarkup()
-            confirm_buttons.add(
-                InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_payment_{payment_id}"),
-                InlineKeyboardButton("Rad etish", callback_data=f"reject_payment_{payment_id}")
-            )
-            bot.send_message(admin, f"Mijoz {message.from_user.first_name} {message.from_user.last_name} "
-                                    f"{amount:,} so'm to'lov qildi.", reply_markup=confirm_buttons)
+        if amount <= 0:
+            bot.send_message(message.chat.id, "❌ To'lov miqdori noto‘g‘ri. Iltimos, qaytadan kiriting.")
+            return
 
-        bot.send_message(message.chat.id, "To'lovingiz tasdiq uchun yuborildi.")
-        user_states[user_id] = None
+        # Store the amount and move to asking for comment
+        user_states[user_id] = {'state': 'awaiting_payment_comment', 'amount': amount}
+        bot.send_message(message.chat.id, "📝 To'lov uchun izoh kiriting (Majburiy emas). Agar izoh yo‘q bo‘lsa, 'Yo‘q' deb yozing.")
+
     except ValueError:
-        bot.send_message(message.chat.id, "To'lov summasi noto'g'ri. Iltimos, qaytadan kiriting.")
-    finally:
-        back_to_menu(message)
+        bot.send_message(message.chat.id, "❌ Iltimos, to'lov miqdorini raqam sifatida kiriting.")
+
+
+@bot.message_handler(func=lambda message: isinstance(user_states.get(str(message.from_user.id)), dict) and user_states[str(message.from_user.id)]['state'] == 'awaiting_payment_comment')
+def receive_payment_comment(message):
+    user_id = str(message.from_user.id)
+    payment_data = user_states.get(user_id)
+
+    if not payment_data or 'amount' not in payment_data:
+        bot.send_message(message.chat.id, "❌ Xatolik yuz berdi. Iltimos, to'lovni qaytadan kiriting.")
+        user_states[user_id] = None
+        return
+
+    amount = payment_data['amount']
+    comment = message.text.strip()
+    if comment.lower() == "yo'q":
+        comment = "Izoh yo'q"
+
+    # Store payment in database
+    conn = create_db_connection()
+    c = conn.cursor()
+    c.execute("INSERT INTO payments (user_id, amount, is_confirmed, comment) VALUES (?, ?, ?, ?)", (user_id, amount, 0, comment))
+    conn.commit()
+    payment_id = c.lastrowid
+    conn.close()
+
+    # Notify client
+    bot.send_message(
+        message.chat.id,
+        f"✅ *To'lov qabul qilindi!* \n\n"
+        f"💰 *Miqdor:* {amount:,} so'm \n"
+        f"📝 *Izoh:* {comment} \n\n"
+        f"⏳ Tasdiqlash kutilmoqda."
+    )
+
+    # Notify admins
+    admins = list_admins()
+    for admin in admins:
+        confirm_buttons = InlineKeyboardMarkup()
+        confirm_buttons.add(
+            InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_payment_{payment_id}"),
+            InlineKeyboardButton("Rad etish", callback_data=f"reject_payment_{payment_id}")
+        )
+        bot.send_message(admin, f"📢 *Yangi to'lov!* \n\n"
+                                f"👤 *Mijoz ID:* {user_id} \n"
+                                f"💰 *Miqdor:* {amount:,} so'm \n"
+                                f"📝 *Izoh:* {comment} \n\n"
+                                f"✅ Tasdiqlash yoki rad etish uchun tugmalardan foydalaning.", reply_markup=confirm_buttons)
+
+    # Reset state
+    user_states[user_id] = None
+    back_to_menu(message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_payment_") or call.data.startswith("reject_payment_"))
