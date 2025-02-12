@@ -1,10 +1,19 @@
+import os
 from datetime import datetime
-
 import telebot
 from telebot.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from dotenv import load_dotenv
 import sqlite3
 
-TOKEN = '7099572080:AAH6FYY_KDVrCgvhVa8CgV2ZdTIESi0JZEw'
+# Load environment variables
+load_dotenv()
+
+# Retrieve the token
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# Ensure the token exists
+if not TOKEN:
+    raise ValueError("ERROR: TELEGRAM_BOT_TOKEN not found! Set it in the .env file.")
 
 bot = telebot.TeleBot(TOKEN)
 
