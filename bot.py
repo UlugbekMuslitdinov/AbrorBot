@@ -1963,12 +1963,12 @@ def receive_payment_amount(message):
         amount = int(message.text.strip())
 
         if amount <= 0:
-            bot.send_message(message.chat.id, "❌ To'lov miqdori noto‘g‘ri. Iltimos, qaytadan kiriting.")
+            bot.send_message(message.chat.id, "❌ To'lov miqdori noto'g'ri. Iltimos, qaytadan kiriting.")
             return
 
         # Store the amount and move to asking for comment
         user_states[user_id] = {'state': 'awaiting_payment_comment', 'amount': amount}
-        bot.send_message(message.chat.id, "📝 To'lov uchun izoh kiriting (Majburiy emas). Agar izoh yo‘q bo‘lsa, 'Yo‘q' deb yozing.")
+        bot.send_message(message.chat.id, "📝 To'lov uchun izoh kiriting (Majburiy emas). Agar izoh yo'q bo'lsa, 'Yoq' deb yozing.")
 
     except ValueError:
         bot.send_message(message.chat.id, "❌ Iltimos, to'lov miqdorini raqam sifatida kiriting.")
