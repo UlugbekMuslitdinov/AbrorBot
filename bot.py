@@ -4,6 +4,28 @@ import telebot
 from telebot.types import BotCommand, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from dotenv import load_dotenv
 import sqlite3
+import logging
+import sys
+
+# Ensure logs directory exists
+log_file = "bot.log"
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,  # Change to DEBUG for more detailed logs
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)  # Optional: Also print logs to console
+    ]
+)
+
+# Log uncaught exceptions
+def log_exceptions(exctype, value, traceback):
+    logging.error("Uncaught exception", exc_info=(exctype, value, traceback))
+
+sys.excepthook = log_exceptions
+
 
 # Load environment variables
 load_dotenv()
@@ -239,6 +261,16 @@ def get_client_discount(client_id):
     result = c.fetchone()
     conn.close()
     return result[0] if result and result[0] is not None else 0
+
+
+def create_db_connection():
+    try:
+        conn = sqlite3.connect('data.db')
+        logging.info("Database connection established.")
+        return conn
+    except Exception as e:
+        logging.error(f"Database connection error: {e}", exc_info=True)
+
 
 
 # Handle the selection of a client for editing
@@ -1982,6 +2014,7 @@ def receive_payment_comment(message):
     if not payment_data or 'amount' not in payment_data:
         bot.send_message(message.chat.id, "❌ Xatolik yuz berdi. Iltimos, to'lovni qaytadan kiriting.")
         user_states[user_id] = None
+        logging.warning(f"User {user_id} encountered an error: Missing payment data.")
         return
 
     amount = payment_data['amount']
@@ -1989,40 +2022,55 @@ def receive_payment_comment(message):
     if comment.lower() == "yo'q":
         comment = "Izoh yo'q"
 
-    # Store payment in database
-    conn = create_db_connection()
-    c = conn.cursor()
-    c.execute("INSERT INTO payments (user_id, amount, is_confirmed, comment) VALUES (?, ?, ?, ?)", (user_id, amount, 0, comment))
-    conn.commit()
-    payment_id = c.lastrowid
-    conn.close()
+    try:
+        # Store payment in database
+        conn = create_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO payments (user_id, amount, is_confirmed, comment) VALUES (?, ?, ?, ?)", (user_id, amount, 0, comment))
+        conn.commit()
+        payment_id = c.lastrowid
+        conn.close()
 
-    # Notify client
-    bot.send_message(
-        message.chat.id,
-        f"✅ *To'lov qabul qilindi!* \n\n"
-        f"💰 *Miqdor:* {amount:,} so'm \n"
-        f"📝 *Izoh:* {comment} \n\n"
-        f"⏳ Tasdiqlash kutilmoqda."
-    )
+        logging.info(f"Payment received: User {user_id}, Amount: {amount}, Comment: {comment}")
 
-    # Notify admins
-    admins = list_admins()
-    for admin in admins:
-        confirm_buttons = InlineKeyboardMarkup()
-        confirm_buttons.add(
-            InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_payment_{payment_id}"),
-            InlineKeyboardButton("Rad etish", callback_data=f"reject_payment_{payment_id}")
+        # Notify client
+        bot.send_message(
+            message.chat.id,
+            f"✅ *To'lov qabul qilindi!* \n\n"
+            f"💰 *Miqdor:* {amount:,} so'm \n"
+            f"📝 *Izoh:* {comment} \n\n"
+            f"⏳ Tasdiqlash kutilmoqda."
         )
-        bot.send_message(admin, f"📢 *Yangi to'lov!* \n\n"
-                                f"👤 *Mijoz ID:* {user_id} \n"
-                                f"💰 *Miqdor:* {amount:,} so'm \n"
-                                f"📝 *Izoh:* {comment} \n\n"
-                                f"✅ Tasdiqlash yoki rad etish uchun tugmalardan foydalaning.", reply_markup=confirm_buttons)
 
-    # Reset state
-    user_states[user_id] = None
-    back_to_menu(message)
+        # Notify admins
+        admins = list_admins()
+        for admin in admins:
+            confirm_buttons = InlineKeyboardMarkup()
+            confirm_buttons.add(
+                InlineKeyboardButton("Tasdiqlash", callback_data=f"confirm_payment_{payment_id}"),
+                InlineKeyboardButton("Rad etish", callback_data=f"reject_payment_{payment_id}")
+            )
+            bot.send_message(admin, f"📢 *Yangi to'lov!* \n\n"
+                                    f"👤 *Mijoz ID:* {user_id} \n"
+                                    f"💰 *Miqdor:* {amount:,} so'm \n"
+                                    f"📝 *Izoh:* {comment} \n\n"
+                                    f"✅ Tasdiqlash yoki rad etish uchun tugmalardan foydalaning.", reply_markup=confirm_buttons)
+        
+        logging.info(f"Payment notification sent to admins for User {user_id}, Payment ID: {payment_id}")
+
+        # Reset state
+        user_states[user_id] = None
+        back_to_menu(message)
+
+    except Exception as e:
+        logging.error(f"Error processing payment for User {user_id}: {e}", exc_info=True)
+        bot.send_message(message.chat.id, "❌ Xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.")
+
+
+
+@bot.message_handler(func=lambda message: True)
+def log_user_message(message):
+    logging.info(f"User {message.from_user.id} sent: {message.text}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_payment_") or call.data.startswith("reject_payment_"))
