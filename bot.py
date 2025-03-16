@@ -2051,7 +2051,7 @@ def receive_payment_comment(message):
                 InlineKeyboardButton("Rad etish", callback_data=f"reject_payment_{payment_id}")
             )
             bot.send_message(admin, f"📢 *Yangi to'lov!* \n\n"
-                                    f"👤 *Mijoz ID:* {user_id} \n"
+                                    f"👤 *Mijoz:* {get_client_full_name(user_id)}\n"
                                     f"💰 *Miqdor:* {amount:,} so'm \n"
                                     f"📝 *Izoh:* {comment} \n\n"
                                     f"✅ Tasdiqlash yoki rad etish uchun tugmalardan foydalaning.", reply_markup=confirm_buttons)
